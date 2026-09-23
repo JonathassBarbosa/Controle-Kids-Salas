@@ -6,6 +6,7 @@ import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type Role } from 
 import { ages, careSummary, daysAgo, formatDateBR, genders, roomName, shifts, today } from "./model";
 import { exportPng, exportXlsx } from "./exports";
 import { Choice } from "./choice";
+import Stock from "./stock";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -35,6 +36,7 @@ export default function Management({
   onAuthExpired: (message?: string) => void;
 }) {
   const isAdmin = user.role === "admin";
+  const isGestor = user.role === "gestor";
   const myRooms = useMemo(() => rooms.filter((r) => isAdmin || user.roomIds.includes(r.id)), [rooms, user, isAdmin]);
   const editableWithoutLimit = isAdmin;
 
@@ -180,7 +182,7 @@ export default function Management({
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="management-tabs" aria-label="Área de gestão">
-          {(isAdmin ? ["Dashboard", "Usuários", "Salas", "Sistema"] : ["Dashboard"]).map((t) => (
+          {["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários"] : []), ...(isAdmin ? ["Salas", "Sistema"] : [])].map((t) => (
             <TabsTrigger key={t} value={t}>
               {t}
             </TabsTrigger>
@@ -288,7 +290,8 @@ export default function Management({
         </>
       )}
 
-      {tab === "Usuários" && isAdmin && <UsersPanel idToken={idToken} rooms={rooms} currentUid={user.uid} onAuthExpired={onAuthExpired} />}
+      {tab === "Estoque" && <Stock user={user} idToken={idToken} rooms={rooms} onAuthExpired={onAuthExpired} />}
+      {tab === "Usuários" && (isAdmin || isGestor) && <UsersPanel idToken={idToken} rooms={rooms} actor={user} onAuthExpired={onAuthExpired} />}
       {tab === "Salas" && isAdmin && <RoomsPanel idToken={idToken} rooms={rooms} onChanged={onRoomsChanged} onAuthExpired={onAuthExpired} />}
       {tab === "Sistema" && isAdmin && <SystemPanel />}
 
@@ -323,14 +326,18 @@ export default function Management({
 function UsersPanel({
   idToken,
   rooms,
-  currentUid,
+  actor,
   onAuthExpired,
 }: {
   idToken: string;
   rooms: ApiRoom[];
-  currentUid: string;
+  actor: ApiUser;
   onAuthExpired: (message?: string) => void;
 }) {
+  const isAdmin = actor.role === "admin";
+  // Gestor(a) só pode escolher, ver e vincular as próprias salas — o
+  // servidor aplica a mesma restrição de verdade em admin.saveUser.
+  const selectableRooms = isAdmin ? rooms.filter((r) => r.active) : rooms.filter((r) => r.active && actor.roomIds.includes(r.id));
   const [users, setUsers] = useState<ApiUser[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState<Partial<ApiUser> & { password?: string } | null>(null);
@@ -377,12 +384,13 @@ function UsersPanel({
       setError("Confira nome, usuário (letras minúsculas/números/. _ -) e e-mail.");
       return;
     }
-    if (!editing.role) {
+    const role = (isAdmin ? editing.role : "operador") as Role | undefined;
+    if (!role) {
       setError("Selecione o perfil.");
       return;
     }
     const roomIds = editing.roomIds || [];
-    if (editing.role !== "admin" && roomIds.length === 0) {
+    if (role !== "admin" && roomIds.length === 0) {
       setError("Vincule pelo menos uma sala.");
       return;
     }
@@ -398,7 +406,7 @@ function UsersPanel({
         username,
         name,
         email,
-        role: editing.role as Role,
+        role,
         roomIds,
         active: editing.active ?? true,
         password: editing.password || undefined,
@@ -426,9 +434,16 @@ function UsersPanel({
   return (
     <>
       <div className="export-actions">
-        <h2>Usuários</h2>
-        <button onClick={() => { setError(""); setEditing({ role: "operador", roomIds: [], active: true }); }}>Novo usuário</button>
+        <h2>{isAdmin ? "Usuários" : "Recreadoras das minhas salas"}</h2>
+        <button onClick={() => { setError(""); setEditing({ role: "operador", roomIds: isAdmin ? [] : [...actor.roomIds], active: true }); }}>
+          {isAdmin ? "Novo usuário" : "Nova recreadora"}
+        </button>
       </div>
+      {!isAdmin && (
+        <p className="data-note">
+          Como gestor(a) de sala, você só cadastra e edita recreadoras (perfil operador) vinculadas às suas próprias salas.
+        </p>
+      )}
       {loadError && (
         <p className="error-message" role="alert">
           {loadError}{" "}
@@ -459,7 +474,7 @@ function UsersPanel({
                   <button className="link-button" onClick={() => setEditing({ ...u })}>
                     Editar
                   </button>
-                  <button className="link-button" disabled={u.uid === currentUid} onClick={() => toggleActive(u)}>
+                  <button className="link-button" disabled={u.uid === actor.uid} onClick={() => toggleActive(u)}>
                     {u.active ? "Bloquear" : "Ativar"}
                   </button>
                 </TableCell>
@@ -491,12 +506,18 @@ function UsersPanel({
                 {editing.uid ? "Nova senha (deixe em branco para manter a atual)" : "Senha (mínimo 12 caracteres)"}
                 <input type="password" value={editing.password || ""} onChange={(e) => setEditing({ ...editing, password: e.target.value })} autoComplete="new-password" />
               </label>
-              <Choice label="Perfil" value={editing.role || "operador"} onChange={(v) => setEditing({ ...editing, role: v as Role })} options={["operador", "gestor", "admin"]} optionLabels={ROLE_LABELS} />
+              {isAdmin ? (
+                <Choice label="Perfil" value={editing.role || "operador"} onChange={(v) => setEditing({ ...editing, role: v as Role })} options={["operador", "gestor", "admin"]} optionLabels={ROLE_LABELS} />
+              ) : (
+                <p className="data-note" style={{ margin: 0 }}>
+                  Perfil: {ROLE_LABELS.operador} (gestores só cadastram recreadoras).
+                </p>
+              )}
               {editing.role !== "admin" && (
                 <fieldset className="field">
                   <legend>Salas vinculadas</legend>
                   <div className="room-checklist">
-                    {rooms.filter((r) => r.active).map((r) => (
+                    {selectableRooms.map((r) => (
                       <label key={r.id}>
                         <input type="checkbox" checked={(editing.roomIds || []).includes(r.id)} onChange={() => toggleRoom(r.id)} />
                         {r.name}

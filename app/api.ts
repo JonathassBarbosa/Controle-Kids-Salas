@@ -1,4 +1,4 @@
-// Cliente da API do GAV Kids (Apps Script v3, apps-script/Code.gs).
+// Cliente da API do GAV Kids (Apps Script v4, apps-script/Code.gs).
 // Contrato: POST no /exec, corpo JSON, Content-Type text/plain;charset=utf-8
 // (evita preflight CORS — não usar Authorization header, JSONP ou no-cors).
 // Resposta sempre {ok:true,data} ou {ok:false,error:{code,message}}.
@@ -10,6 +10,11 @@
 // opcional). Não há mais entrada/saída (só check-in) nem perfil reaproveitado
 // entre atendimentos: cada chegada é um cadastro novo, mesmo para uma criança
 // que já esteve aqui antes.
+//
+// v4: gestor(a) de sala agora pode cadastrar/editar suas próprias recreadoras
+// (admin.users/admin.saveUser aceitam o papel gestor com escopo restrito às
+// próprias salas). Acrescenta também o controle de estoque por sala
+// (stock.save/stock.list/stock.history) — ver ApiStockEntry abaixo.
 import { loadConfig } from "./config";
 
 export type Role = "operador" | "gestor" | "admin";
@@ -63,6 +68,40 @@ export interface MeResponse {
   ages: string[];
   genders: string[];
   shifts: string[];
+  stockItems: string[];
+}
+
+export interface ApiStockEntry {
+  id: string;
+  version: number;
+  roomId: string;
+  date: string;
+  qty: Record<string, number>;
+  notes: string;
+  createdBy: string;
+  createdAt: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface ListStockParams {
+  from: string;
+  to: string;
+  roomId?: string;
+}
+
+export interface ListStockResponse {
+  entries: ApiStockEntry[];
+}
+
+export interface SaveStockInput {
+  id?: string;
+  version?: number;
+  requestId: string;
+  roomId: string;
+  date: string;
+  qty: Record<string, number>;
+  notes?: string;
 }
 
 export interface LoginResponse {
@@ -237,6 +276,15 @@ export function adminSaveUser(idToken: string, user: SaveUserInput) {
 }
 export function adminSaveRoom(idToken: string, room: SaveRoomInput) {
   return call<ApiRoom>("admin.saveRoom", { idToken, room });
+}
+export function stockSave(idToken: string, entry: SaveStockInput) {
+  return call<ApiStockEntry>("stock.save", { idToken, entry });
+}
+export function stockList(idToken: string, params: ListStockParams) {
+  return call<ListStockResponse>("stock.list", { idToken, ...params });
+}
+export function stockHistory(idToken: string, recordId: string) {
+  return call<ApiStockEntry[]>("stock.history", { idToken, recordId });
 }
 // Verifica se a URL /exec responde e está na versão esperada, sem autenticar.
 export async function ping(): Promise<{ version: string } | null> {

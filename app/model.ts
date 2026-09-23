@@ -11,6 +11,56 @@ export const bathroomOptions: { value: Bathroom; label: string }[] = [
   { value: "chamar_responsavel", label: "Precisa chamar o responsável" },
 ];
 
+// Itens fixos do controle de estoque, na MESMA ordem/ids de GAV_STOCK_ITEMS
+// no backend (apps-script/Code.gs) — não reordene. Os rótulos existem só
+// aqui, para a interface; a validação de quantidade (inteiro 0–9999) é
+// sempre feita de verdade pelo servidor.
+export const STOCK_ITEMS: { key: string; label: string }[] = [
+  { key: "pipoca", label: "Pipoca" },
+  { key: "pirulito", label: "Pirulito" },
+  { key: "biscoitoRecheadoOreo", label: "Biscoito recheado Oreo" },
+  { key: "bombomSonhoDeValsa", label: "Bombom Sonho de Valsa" },
+  { key: "bombomOuroBranco", label: "Bombom Ouro Branco" },
+  { key: "lencosUmedecidosPacote", label: "Lenços umedecidos (pacote)" },
+  { key: "pomadaNistatina", label: "Pomada Nistatina" },
+  { key: "batataRuffles", label: "Batata Ruffles" },
+  { key: "papelCrepom", label: "Papel crepom" },
+  { key: "emborrachadoComBrilho", label: "Emborrachado com brilho" },
+  { key: "emborrachadoSemBrilho", label: "Emborrachado sem brilho" },
+  { key: "sacoDeBaloesColoridos", label: "Saco de balões coloridos" },
+  { key: "fraldaP", label: "Fralda tamanho P" },
+  { key: "fraldaM", label: "Fralda tamanho M" },
+  { key: "fraldaG", label: "Fralda tamanho G" },
+  { key: "fraldaXG", label: "Fralda tamanho XG" },
+];
+
+export function emptyStockQty(): Record<string, number> {
+  return Object.fromEntries(STOCK_ITEMS.map((i) => [i.key, 0]));
+}
+
+export function stockQtyFromEntry(entry: { qty: Record<string, number> }): Record<string, number> {
+  const q = emptyStockQty();
+  STOCK_ITEMS.forEach((i) => (q[i.key] = Number(entry.qty[i.key] || 0)));
+  return q;
+}
+
+// Só para feedback imediato na UI — o servidor sempre valida de verdade.
+export function validateStockQty(qty: Record<string, number>) {
+  for (const item of STOCK_ITEMS) {
+    const v = qty[item.key];
+    if (!Number.isInteger(v) || v < 0 || v > 9999) return `Quantidade inválida em "${item.label}" (use um número inteiro de 0 a 9999).`;
+  }
+  return "";
+}
+
+// Assinatura local de conteúdo, só para decidir se um requestId pode ser
+// reaproveitado num reenvio (mesmo conteúdo = mesmo requestId, evitando
+// duplicar o lançamento). Não precisa bater byte a byte com o fingerprint
+// calculado no servidor — só precisa ser estável para o mesmo conteúdo.
+export function stockSignature(id: string | null, version: number | null, roomId: string, date: string, qty: Record<string, number>, notes: string) {
+  return JSON.stringify([id || "", version || 0, roomId, date, STOCK_ITEMS.map((i) => qty[i.key]), notes.trim()]);
+}
+
 export function today() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
