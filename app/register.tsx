@@ -482,7 +482,11 @@ export default function Register({
                   ))}
                 </ul>
               )}
-              <p className="roster-note">Para corrigir um registro já salvo, use Histórico e gestão.</p>
+              <p className="roster-note">
+                {user.role === "operador"
+                  ? "Para corrigir um registro já salvo, peça a um(a) gestor(a) ou administrador(a)."
+                  : "Para corrigir um registro já salvo, use Histórico e gestão."}
+              </p>
             </section>
           </>
         )}

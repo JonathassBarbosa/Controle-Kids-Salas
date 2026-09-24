@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, Check, Loader2, Pencil, RefreshCw } from "lucide-react";
+import { Candy, Check, Loader2, Pencil, RefreshCw } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRoom, type ApiStockEntry, type ApiUser } from "./api";
 import { STOCK_ITEMS, daysAgo, emptyStockQty, formatDateBR, roomName, stockQtyFromEntry, stockSignature, today, validateStockQty } from "./model";
@@ -10,10 +10,12 @@ import { Choice } from "./choice";
 
 // Grade dos 16 insumos fixos, usada tanto no lançamento diário quanto no
 // ajuste. `disabled` trava os campos quando quem está olhando não pode
-// editar (ex.: operador vendo um lançamento já enviado).
-function QuantityGrid({ qty, onChange, disabled }: { qty: Record<string, number>; onChange: (key: string, value: number) => void; disabled?: boolean }) {
+// editar (ex.: operador vendo um lançamento já enviado). `playful` dá o
+// visual colorido/arredondado do lançamento do dia a dia (o que a
+// recreadora usa); o ajuste de gestor/admin fica no visual sóbrio padrão.
+function QuantityGrid({ qty, onChange, disabled, playful }: { qty: Record<string, number>; onChange: (key: string, value: number) => void; disabled?: boolean; playful?: boolean }) {
   return (
-    <div className="stock-grid">
+    <div className={playful ? "stock-grid playful" : "stock-grid"}>
       {STOCK_ITEMS.map((item) => (
         <label className="field" key={item.key}>
           {item.label}
@@ -271,85 +273,85 @@ export default function Stock({
 
   return (
     <>
-      <div className="export-actions">
-        <h2>
-          <Boxes size={20} style={{ verticalAlign: "middle", marginRight: 8 }} />
-          Saída de estoque de hoje
-        </h2>
-      </div>
-
-      {(myRooms.length > 1 || isAdmin) && (
-        <div style={{ marginBottom: 18, maxWidth: 340 }}>
-          <Choice
-            label="Sala"
-            value={roomId}
-            onChange={setRoomId}
-            options={(isAdmin ? rooms.filter((r) => r.active) : myRooms).map((r) => r.id)}
-            optionLabels={Object.fromEntries((isAdmin ? rooms.filter((r) => r.active) : myRooms).map((r) => [r.id, r.name]))}
-          />
+      <div className="stock-hero">
+        <div className="stock-hero-icon">
+          <Candy size={26} />
         </div>
-      )}
+        <h2 style={{ margin: 0 }}>Saída de estoque de hoje</h2>
 
-      {!roomId ? (
-        <p className="empty-message">Selecione uma sala para lançar ou conferir a saída de hoje.</p>
-      ) : todayEntry === undefined ? (
-        <p className="data-note">
-          <Loader2 size={16} className="spin" style={{ verticalAlign: "middle", marginRight: 8 }} />
-          Carregando…
-        </p>
-      ) : (
-        <>
-          {todayError && (
-            <p className="error-message" role="alert">
-              {todayError}{" "}
-              <button className="link-button" onClick={loadToday}>
-                Tentar novamente
+        {(myRooms.length > 1 || isAdmin) && (
+          <div style={{ marginTop: 16, marginBottom: 4, maxWidth: 340 }}>
+            <Choice
+              label="Sala"
+              value={roomId}
+              onChange={setRoomId}
+              options={(isAdmin ? rooms.filter((r) => r.active) : myRooms).map((r) => r.id)}
+              optionLabels={Object.fromEntries((isAdmin ? rooms.filter((r) => r.active) : myRooms).map((r) => [r.id, r.name]))}
+            />
+          </div>
+        )}
+
+        {!roomId ? (
+          <p className="empty-message">Selecione uma sala para lançar ou conferir a saída de hoje.</p>
+        ) : todayEntry === undefined ? (
+          <p className="data-note">
+            <Loader2 size={16} className="spin" style={{ verticalAlign: "middle", marginRight: 8 }} />
+            Carregando…
+          </p>
+        ) : (
+          <>
+            {todayError && (
+              <p className="error-message" role="alert">
+                {todayError}{" "}
+                <button className="link-button" onClick={loadToday}>
+                  Tentar novamente
+                </button>
+              </p>
+            )}
+
+            {todayEntry && !editingToday && (
+              <p className="data-note">
+                Lançamento de hoje ({formatDateBR(today())}) já enviado por {todayEntry.createdBy === user.uid ? "você" : "uma recreadora desta sala"}.{" "}
+                {canAdjust
+                  ? "Como você pode ajustar, os campos abaixo mostram os valores já enviados."
+                  : "Só um(a) gestor(a) ou administrador(a) pode ajustar um lançamento já enviado."}
+              </p>
+            )}
+
+            {saved && (
+              <p className="data-note">
+                <Check size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                Lançamento salvo com sucesso.
+              </p>
+            )}
+
+            {formError && (
+              <p className="error-message" role="alert">
+                {formError}
+              </p>
+            )}
+
+            <QuantityGrid qty={qty} onChange={patchQty} disabled={lockedForOperador || saving} playful />
+
+            <label className="field" style={{ maxWidth: 480, marginTop: 18 }}>
+              Observação <span className="optional-tag">opcional</span>
+              <input type="text" maxLength={500} value={notes} disabled={lockedForOperador || saving} onChange={(e) => setNotes(e.target.value)} />
+            </label>
+
+            {!lockedForOperador && (
+              <button className="stock-submit" disabled={saving} onClick={submitToday}>
+                {saving ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
+                {saving ? "Salvando…" : todayEntry ? "Salvar ajuste de hoje" : "Confirmar saída de hoje"}
               </button>
-            </p>
-          )}
-
-          {todayEntry && !editingToday && (
-            <p className="data-note">
-              Lançamento de hoje ({formatDateBR(today())}) já enviado por {todayEntry.createdBy === user.uid ? "você" : "uma recreadora desta sala"}.{" "}
-              {canAdjust
-                ? "Como você pode ajustar, os campos abaixo mostram os valores já enviados."
-                : "Só um(a) gestor(a) ou administrador(a) pode ajustar um lançamento já enviado."}
-            </p>
-          )}
-
-          {saved && (
-            <p className="data-note">
-              <Check size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              Lançamento salvo com sucesso.
-            </p>
-          )}
-
-          {formError && (
-            <p className="error-message" role="alert">
-              {formError}
-            </p>
-          )}
-
-          <QuantityGrid qty={qty} onChange={patchQty} disabled={lockedForOperador || saving} />
-
-          <label className="field" style={{ maxWidth: 480, marginTop: 18 }}>
-            Observação <span className="optional-tag">opcional</span>
-            <input type="text" maxLength={500} value={notes} disabled={lockedForOperador || saving} onChange={(e) => setNotes(e.target.value)} />
-          </label>
-
-          {!lockedForOperador && (
-            <button className="action-button" style={{ marginTop: 18 }} disabled={saving} onClick={submitToday}>
-              {saving ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
-              {saving ? "Salvando…" : todayEntry ? "Salvar ajuste de hoje" : "Confirmar saída de hoje"}
-            </button>
-          )}
-          {lockedForOperador && canAdjust === false && (
-            <p className="roster-note" style={{ marginTop: 10 }}>
-              Volte amanhã para o próximo lançamento, ou peça a um(a) gestor(a) para ajustar este.
-            </p>
-          )}
-        </>
-      )}
+            )}
+            {lockedForOperador && canAdjust === false && (
+              <p className="roster-note" style={{ marginTop: 10 }}>
+                Volte amanhã para o próximo lançamento, ou peça a um(a) gestor(a) para ajustar este.
+              </p>
+            )}
+          </>
+        )}
+      </div>
 
       {canAdjust && (
         <>

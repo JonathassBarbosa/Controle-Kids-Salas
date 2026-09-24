@@ -37,10 +37,14 @@ export default function Management({
 }) {
   const isAdmin = user.role === "admin";
   const isGestor = user.role === "gestor";
+  // Operador(a) só usa esta tela para o estoque diário — sem dashboard,
+  // histórico de crianças ou gestão de usuários/salas (pedido do cliente em
+  // 24/09/2026: reduzir o que o operador vê aqui a "apenas o estoque").
+  const isOperadorOnly = user.role === "operador";
   const myRooms = useMemo(() => rooms.filter((r) => isAdmin || user.roomIds.includes(r.id)), [rooms, user, isAdmin]);
   const editableWithoutLimit = isAdmin;
 
-  const [tab, setTab] = useState("Dashboard");
+  const [tab, setTab] = useState(() => (isOperadorOnly ? "Estoque" : "Dashboard"));
   const [start, setStart] = useState(daysAgo(30));
   const [end, setEnd] = useState(today());
   const [roomFilter, setRoomFilter] = useState("");
@@ -66,7 +70,7 @@ export default function Management({
   );
 
   const loadRecords = useCallback(async () => {
-    if (start > end) return;
+    if (isOperadorOnly || start > end) return;
     setLoading(true);
     setLoadError("");
     try {
@@ -86,7 +90,7 @@ export default function Management({
     } finally {
       setLoading(false);
     }
-  }, [idToken, start, end, roomFilter, shift, age, gender, teaFilter, authGuard]);
+  }, [idToken, start, end, roomFilter, shift, age, gender, teaFilter, authGuard, isOperadorOnly]);
 
   useEffect(() => {
     loadRecords();
@@ -169,26 +173,30 @@ export default function Management({
     </Table>
   );
 
+  const tabs = isOperadorOnly ? ["Estoque"] : ["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários"] : []), ...(isAdmin ? ["Salas", "Sistema"] : [])];
+
   return (
-    <section className="management">
+    <section className={isOperadorOnly ? "management management-simple" : "management"}>
       <header className="management-heading">
         <div>
-          <p className="eyebrow">GAV KIDS · GESTÃO</p>
-          <h1>Visão da operação</h1>
-          <p>Atendimentos dos espaços kids{!isAdmin ? " — salas vinculadas ao seu usuário" : ""}</p>
+          <p className="eyebrow">{isOperadorOnly ? "GAV KIDS · ESTOQUE" : "GAV KIDS · GESTÃO"}</p>
+          <h1>{isOperadorOnly ? "Estoque da sua sala" : "Visão da operação"}</h1>
+          <p>{isOperadorOnly ? "Registre a saída de hoje dos insumos da sua sala." : `Atendimentos dos espaços kids${!isAdmin ? " — salas vinculadas ao seu usuário" : ""}`}</p>
         </div>
         <img src="./gav-logo-blue.png" alt="GAV" />
       </header>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="management-tabs" aria-label="Área de gestão">
-          {["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários"] : []), ...(isAdmin ? ["Salas", "Sistema"] : [])].map((t) => (
-            <TabsTrigger key={t} value={t}>
-              {t}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      {tabs.length > 1 && (
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList className="management-tabs" aria-label="Área de gestão">
+            {tabs.map((t) => (
+              <TabsTrigger key={t} value={t}>
+                {t}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      )}
 
       {tab === "Dashboard" && (
         <>

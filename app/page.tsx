@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { BarChart3, History, Home, Loader2, LogOut, RefreshCw, Sparkles } from "lucide-react";
+import { BarChart3, Candy, ClipboardList, History, Loader2, LogOut, RefreshCw, Sparkles } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type LoginResponse } from "./api";
 import { loadConfig } from "./config";
@@ -132,6 +132,12 @@ export default function App() {
   }
 
   const { idToken, user, rooms } = boot;
+  // Operador(a) só faz check-in e lança o estoque diário — sem dashboard,
+  // histórico ou gestão de usuários/salas. Gestor(a) e admin continuam com o
+  // menu completo ("Histórico e gestão", com abas por papel dentro dele).
+  const isOperador = user.role === "operador";
+  const secondNavLabel = isOperador ? "Estoque" : "Histórico e gestão";
+  const SecondNavIcon = isOperador ? Candy : History;
 
   return (
     <main className="app-shell">
@@ -142,12 +148,12 @@ export default function App() {
         </div>
         <nav aria-label="Navegação principal">
           <a className={view === "register" ? "active" : ""} onClick={() => { setEditTarget(null); setView("register"); }}>
-            <Home size={20} />
+            <ClipboardList size={20} />
             Início
           </a>
           <a className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>
-            <History size={20} />
-            Histórico e gestão
+            <SecondNavIcon size={20} />
+            {secondNavLabel}
           </a>
           <a onClick={() => setHelp(true)}>
             <Sparkles size={20} />
@@ -212,17 +218,19 @@ export default function App() {
 
         <nav className="mobile-nav">
           <a className={view === "register" ? "active" : ""} onClick={() => { setEditTarget(null); setView("register"); }}>
-            <Home size={20} />
+            <ClipboardList size={20} />
             <span>Início</span>
           </a>
           <a className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>
-            <History size={20} />
-            <span>Histórico</span>
+            <SecondNavIcon size={20} />
+            <span>{secondNavLabel}</span>
           </a>
-          <a onClick={() => setView("manage")}>
-            <BarChart3 size={20} />
-            <span>Resumo</span>
-          </a>
+          {!isOperador && (
+            <a onClick={() => setView("manage")}>
+              <BarChart3 size={20} />
+              <span>Resumo</span>
+            </a>
+          )}
         </nav>
       </section>
 
@@ -234,7 +242,9 @@ export default function App() {
           <p>
             {user.role === "admin"
               ? "Como administrador, você pode registrar e corrigir qualquer data passada, além de gerenciar usuários e salas."
-              : "Você pode corrigir registros das suas salas pelo menu Histórico e gestão durante os últimos 7 dias."}
+              : user.role === "gestor"
+              ? "Você pode corrigir registros das suas salas pelo menu Histórico e gestão durante os últimos 7 dias, além de cadastrar recreadoras e ajustar o estoque."
+              : "Registre a saída de estoque de hoje pelo menu Estoque. Se precisar corrigir um check-in já enviado, peça a um(a) gestor(a) ou administrador(a) — o prazo é de até 7 dias."}
           </p>
           <p>Não colete documento ou CPF da criança. As informações são pessoais e algumas são sensíveis (deficiência, restrição alimentar): use apenas para o cuidado durante o atendimento.</p>
         </DialogContent>
