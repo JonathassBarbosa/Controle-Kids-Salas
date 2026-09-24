@@ -6,6 +6,7 @@ import { ApiError, type ApiRoom, type ApiStockEntry, type ApiUser } from "./api"
 import { STOCK_ITEMS, daysAgo, emptyStockQty, formatDateBR, roomName, stockQtyFromEntry, stockSignature, today, validateStockQty } from "./model";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Choice } from "./choice";
 
 // Grade dos 16 insumos fixos, usada tanto no lançamento diário quanto no
@@ -51,6 +52,16 @@ export default function Stock({
   const canAdjust = isAdmin || isGestor;
   const allowPastLimit = isAdmin ? null : 7;
   const myRooms = useMemo(() => rooms.filter((r) => r.active && (isAdmin || user.roomIds.includes(r.id))), [rooms, user, isAdmin]);
+  const roomsInScope = isAdmin ? rooms.filter((r) => r.active) : myRooms;
+
+  // Revisão da tela de estoque (pedido do cliente em 24/09/2026): em vez de
+  // uma rolagem longa só, gestor/admin navegam por sub-abas (Hoje / Ajustar
+  // / Consolidado — este último só admin). Operador continua vendo só o
+  // cartão "Hoje", sem sub-abas visíveis (a lista tem 1 item só e o mesmo
+  // componente Tabs já esconde a barra nesse caso, igual acontece hoje nas
+  // abas principais da tela de gestão).
+  const subTabs = canAdjust ? ["Hoje", "Ajustar", ...(isAdmin ? ["Consolidado"] : [])] : ["Hoje"];
+  const [subTab, setSubTab] = useState<string>("Hoje");
 
   const authGuard = useCallback(
     (err: unknown) => {
@@ -105,6 +116,32 @@ export default function Stock({
     setNotes(todayEntry?.notes || "");
   }, [todayEntry]);
 
+  // "X de Y salas já lançaram hoje": só para quem acompanha mais de uma sala
+  // (gestor/admin). Busca leve, reaproveitando stock.list sem roomId (o
+  // servidor já limita ao escopo de salas de quem está pedindo).
+  const [todayAllEntries, setTodayAllEntries] = useState<ApiStockEntry[] | null>(null);
+  const [summaryTick, setSummaryTick] = useState(0);
+  useEffect(() => {
+    if (!canAdjust) {
+      setTodayAllEntries(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .stockList(idToken, { from: today(), to: today() })
+      .then((res) => {
+        if (!cancelled) setTodayAllEntries(res.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setTodayAllEntries(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canAdjust, idToken, summaryTick]);
+  const launchedRoomIds = useMemo(() => new Set((todayAllEntries || []).map((e) => e.roomId)), [todayAllEntries]);
+  const launchedCount = roomsInScope.filter((r) => launchedRoomIds.has(r.id)).length;
+
   function patchQty(key: string, value: number) {
     setQty((q) => ({ ...q, [key]: value }));
   }
@@ -141,6 +178,7 @@ export default function Stock({
       setSaved(true);
       setEditingToday(false);
       setTodayEntry(result);
+      setSummaryTick((t) => t + 1);
     } catch (err) {
       if (authGuard(err)) return;
       setFormError(err instanceof ApiError ? err.message : "Não foi possível salvar o lançamento agora.");
@@ -221,6 +259,7 @@ export default function Stock({
       setAdjustTarget(null);
       await loadHistory();
       if (adjustTarget.roomId === roomId && adjustTarget.date === today()) await loadToday();
+      if (adjustTarget.date === today()) setSummaryTick((t) => t + 1);
     } catch (err) {
       if (authGuard(err)) return;
       setAdjustError(err instanceof ApiError ? err.message : "Não foi possível salvar o ajuste agora.");
@@ -273,11 +312,30 @@ export default function Stock({
 
   return (
     <>
+      {subTabs.length > 1 && (
+        <Tabs value={subTab} onValueChange={setSubTab}>
+          <TabsList className="management-tabs" aria-label="Seções de estoque">
+            {subTabs.map((t) => (
+              <TabsTrigger key={t} value={t}>
+                {t}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      )}
+
+      {subTab === "Hoje" && (
       <div className="stock-hero">
         <div className="stock-hero-icon">
           <Candy size={26} />
         </div>
         <h2 style={{ margin: 0 }}>Saída de estoque de hoje</h2>
+
+        {canAdjust && todayAllEntries != null && (
+          <p className="stock-launch-summary">
+            {launchedCount} de {roomsInScope.length} salas já lançaram o estoque de hoje.
+          </p>
+        )}
 
         {(myRooms.length > 1 || isAdmin) && (
           <div style={{ marginTop: 16, marginBottom: 4, maxWidth: 340 }}>
@@ -352,12 +410,18 @@ export default function Stock({
           </>
         )}
       </div>
+      )}
 
-      {canAdjust && (
+      {subTab === "Ajustar" && canAdjust && (
         <>
-          <div className="export-actions" style={{ marginTop: 46 }}>
+          <div className="export-actions" style={{ marginTop: 20 }}>
             <h2>Ajustar lançamentos</h2>
           </div>
+          {todayAllEntries != null && (
+            <p className="stock-launch-summary" style={{ marginTop: -6 }}>
+              {launchedCount} de {roomsInScope.length} salas já lançaram o estoque de hoje.
+            </p>
+          )}
           <div className="filters">
             <label className="field">
               De
@@ -420,9 +484,9 @@ export default function Stock({
         </>
       )}
 
-      {isAdmin && (
+      {subTab === "Consolidado" && isAdmin && (
         <>
-          <div className="export-actions" style={{ marginTop: 46 }}>
+          <div className="export-actions" style={{ marginTop: 20 }}>
             <h2>Consolidado de todas as salas</h2>
           </div>
           <div className="filters">

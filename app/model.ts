@@ -80,6 +80,16 @@ export function formatDateBR(iso: string) {
   return iso.split("-").reverse().join("/");
 }
 
+// Minutos desde um timestamp ISO (createdAt de um registro), só para decidir
+// se mostra os atalhos de "editar rápido" (2h) e "Voltou para a mesa" (3h)
+// na lista da própria sala. A regra que vale de verdade é sempre a do
+// servidor (7 dias para operador/gestor corrigirem, 3h para operador
+// alternar "voltou para a mesa"); isto é só para a interface reagir na hora,
+// sem esperar uma tentativa ser recusada.
+export function minutesSince(iso: string) {
+  return (Date.now() - new Date(iso).getTime()) / 60000;
+}
+
 export function roomName(rooms: ApiRoom[], roomId: string) {
   return rooms.find((r) => r.id === roomId)?.name || roomId;
 }

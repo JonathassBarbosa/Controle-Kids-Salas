@@ -9,16 +9,18 @@ import {
   ChevronRight,
   Clock3,
   Loader2,
+  Pencil,
   PhoneCall,
   RefreshCw,
   Salad,
   ShieldCheck,
   Sparkles,
+  Undo2,
   Utensils,
 } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type Bathroom } from "./api";
-import { ages, bathroomOptions, careSummary, daysAgo, draftSignature, emptyDraft, formatDateBR, genders, roomName, shifts, suggestedShift, today, validateEntryDraft, type EntryDraft } from "./model";
+import { ages, bathroomOptions, careSummary, daysAgo, draftSignature, emptyDraft, formatDateBR, genders, minutesSince, roomName, shifts, suggestedShift, today, validateEntryDraft, type EntryDraft } from "./model";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Choice } from "./choice";
 
@@ -89,12 +91,24 @@ export default function Register({
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<{ id: string; signature: string } | null>(null);
 
-  // Lista de quem já foi registrado nesta sala/data/turno, só para conferência
-  // visual da recreadora (evitar duplicar/perder a conta) — não é editável
-  // aqui; correções continuam pelo Histórico e gestão.
+  // Atalho de autocorreção: quem criou o registro pode corrigi-lo direto pela
+  // lista da própria sala, sem precisar de "Histórico e gestão" (que a
+  // recreadora pura nem tem acesso). É só uma facilidade de interface — a
+  // regra de quem pode corrigir o quê continua 100% a cargo do servidor
+  // (records.save já aceita isso normalmente); aqui só decidimos quando
+  // MOSTRAR o atalho (até 2h da criação).
+  const [selfEdit, setSelfEdit] = useState<ApiRecord | null>(null);
+  const effectiveEditTarget = editTarget || selfEdit;
+
+  // Lista de quem já foi registrado nesta sala/data/turno — visível a todas as
+  // recreadoras da sala (não só a quem registrou). Clique num item abre os
+  // detalhes completos; correções "de verdade" fora do atalho de 2h
+  // continuam pelo Histórico e gestão (gestor/admin).
   const [roster, setRoster] = useState<ApiRecord[] | null>(null);
   const [rosterError, setRosterError] = useState(false);
   const [rosterTick, setRosterTick] = useState(0);
+  const [detail, setDetail] = useState<ApiRecord | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   function patch(fields: Partial<EntryDraft>) {
     setDraft((d) => ({ ...d, ...fields }));
@@ -102,6 +116,7 @@ export default function Register({
 
   useEffect(() => {
     if (editTarget) {
+      setSelfEdit(null);
       setDraft(draftFromRecord(editTarget));
       setStep(1);
       setSaved(null);
@@ -110,6 +125,17 @@ export default function Register({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editTarget?.id, editTarget?.version]);
+
+  useEffect(() => {
+    if (selfEdit) {
+      setDraft(draftFromRecord(selfEdit));
+      setStep(1);
+      setSaved(null);
+      setError("");
+      setPending(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selfEdit?.id, selfEdit?.version]);
 
   useEffect(() => {
     if (!draft.roomId || !draft.date || !draft.shift) {
@@ -198,12 +224,48 @@ export default function Register({
   }
 
   function startFresh(keepRoomAndShift: boolean) {
-    onCancelEdit();
+    if (editTarget) onCancelEdit();
+    setSelfEdit(null);
     setDraft((d) => emptyDraft(keepRoomAndShift ? d.roomId : allowedRooms[0]?.id || "", keepRoomAndShift ? d.date : today(), keepRoomAndShift ? d.shift : suggestedShift()));
     setStep(1);
     setSaved(null);
     setError("");
     setPending(null);
+  }
+
+  function cancelEdit() {
+    if (selfEdit) {
+      setSelfEdit(null);
+      setDraft((d) => emptyDraft(d.roomId, d.date, d.shift));
+      setStep(1);
+      setSaved(null);
+      setError("");
+      setPending(null);
+    } else {
+      onCancelEdit();
+    }
+  }
+
+  // Reversível: alterna "Voltou para a mesa" no próprio registro (até 3h da
+  // criação) sem sair da lista. O servidor decide de verdade quem pode
+  // alternar o quê e até quando; se recusar (ex. prazo vencido entre a lista
+  // carregar e o clique), mostramos o erro devolvido por ele.
+  async function toggleReturned(r: ApiRecord) {
+    setTogglingId(r.id);
+    setError("");
+    try {
+      const updated = await api.toggleReturned(idToken, r.id, api.newRequestId());
+      setRoster((cur) => (cur ? cur.map((x) => (x.id === updated.id ? updated : x)) : cur));
+      setDetail((d) => (d && d.id === updated.id ? updated : d));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "AUTH") {
+        onAuthExpired();
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : "Não foi possível atualizar agora. Tente novamente.");
+    } finally {
+      setTogglingId(null);
+    }
   }
 
   if (allowedRooms.length === 0) {
@@ -221,9 +283,9 @@ export default function Register({
       <div className="content">
         <div className="welcome-row">
           <div>
-            <p className="eyebrow">{editTarget ? "CORREÇÃO DE REGISTRO" : "CHECK-IN DA CRIANÇA"}</p>
+            <p className="eyebrow">{effectiveEditTarget ? "CORREÇÃO DE REGISTRO" : "CHECK-IN DA CRIANÇA"}</p>
             <h1>Olá, {user.name.split(" ")[0]}!</h1>
-            <p>{editTarget ? "Ajuste os dados e confirme a correção." : "Registre a criança assim que ela chegar."}</p>
+            <p>{effectiveEditTarget ? "Ajuste os dados e confirme a correção." : "Registre a criança assim que ela chegar."}</p>
           </div>
           <div className="today-card">
             <CalendarDays size={21} />
@@ -266,7 +328,7 @@ export default function Register({
                 <Check size={36} />
               </div>
               <p className="eyebrow">REGISTRO CONFIRMADO PELO SERVIDOR</p>
-              <h2>{editTarget ? "Correção salva!" : "Check-in registrado!"}</h2>
+              <h2>{effectiveEditTarget ? "Correção salva!" : "Check-in registrado!"}</h2>
               <p>
                 {saved.childName} · {formatDateBR(saved.date)} · {saved.shift} · {roomName(rooms, saved.roomId)}.
               </p>
@@ -419,8 +481,8 @@ export default function Register({
                 <ChevronLeft size={19} />
                 Voltar
               </button>
-              {editTarget && (
-                <button className="secondary" type="button" onClick={onCancelEdit} disabled={saving}>
+              {effectiveEditTarget && (
+                <button className="secondary" type="button" onClick={cancelEdit} disabled={saving}>
                   Cancelar correção
                 </button>
               )}
@@ -439,7 +501,7 @@ export default function Register({
           )}
         </section>
 
-        {!editTarget && (
+        {!effectiveEditTarget && (
           <>
             <div className="bottom-links">
               <button type="button" onClick={() => setDateOpen(true)}>
@@ -467,25 +529,64 @@ export default function Register({
                 <p className="roster-empty">Nenhuma criança registrada ainda neste turno.</p>
               ) : (
                 <ul>
-                  {roster.map((r) => (
-                    <li key={r.id}>
-                      <strong>{r.childName}</strong>
-                      <span>
-                        {r.age} · {r.gender}
-                      </span>
-                      <span className="roster-tags">
-                        {careSummary(r, false).map((f) => (
-                          <em key={f}>{f}</em>
-                        ))}
-                      </span>
-                    </li>
-                  ))}
+                  {roster.map((r) => {
+                    const own = r.createdBy === user.uid;
+                    const canQuickEdit = own && minutesSince(r.createdAt) <= 120;
+                    const canToggleReturned = own && minutesSince(r.createdAt) <= 180;
+                    return (
+                      <li key={r.id} className="roster-item-clickable" onClick={() => setDetail(r)}>
+                        <strong>
+                          {r.childName}
+                          {r.returnedToDesk && <span className="roster-badge">Voltou para a mesa</span>}
+                        </strong>
+                        <span>
+                          {r.age} · {r.gender}
+                        </span>
+                        <span className="roster-tags">
+                          {careSummary(r, false).map((f) => (
+                            <em key={f}>{f}</em>
+                          ))}
+                        </span>
+                        {(canQuickEdit || canToggleReturned) && (
+                          <span className="roster-item-actions">
+                            {canQuickEdit && (
+                              <button
+                                type="button"
+                                className="roster-action"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelfEdit(r);
+                                }}
+                              >
+                                <Pencil size={13} />
+                                Editar
+                              </button>
+                            )}
+                            {canToggleReturned && (
+                              <button
+                                type="button"
+                                className="roster-action"
+                                disabled={togglingId === r.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleReturned(r);
+                                }}
+                              >
+                                {togglingId === r.id ? <Loader2 size={13} className="spin" /> : <Undo2 size={13} />}
+                                {r.returnedToDesk ? "Desmarcar" : "Voltou p/ mesa"}
+                              </button>
+                            )}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
               <p className="roster-note">
                 {user.role === "operador"
-                  ? "Para corrigir um registro já salvo, peça a um(a) gestor(a) ou administrador(a)."
-                  : "Para corrigir um registro já salvo, use Histórico e gestão."}
+                  ? "Toque num item da lista para ver todos os detalhes. Você pode editar ou marcar \"Voltou para a mesa\" nos seus próprios registros por um tempo limitado; depois disso, peça a um(a) gestor(a) ou administrador(a)."
+                  : "Toque num item da lista para ver todos os detalhes, ou use Histórico e gestão para corrigir qualquer registro."}
               </p>
             </section>
           </>
@@ -514,6 +615,84 @@ export default function Register({
           >
             Usar data e turno
           </button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
+        <DialogContent>
+          {detail && (
+            <>
+              <DialogTitle>{detail.childName}</DialogTitle>
+              <DialogDescription>
+                {detail.age} · {detail.gender} · {formatDateBR(detail.date)} · {detail.shift} · {roomName(rooms, detail.roomId)}
+              </DialogDescription>
+              <div className="detail-grid">
+                <div>
+                  <span>TEA</span>
+                  <strong>{detail.tea ? "Sim" : "Não"}</strong>
+                </div>
+                <div>
+                  <span>Deficiência física</span>
+                  <strong>{detail.disability ? "Sim" : "Não"}</strong>
+                  {detail.disability && detail.disabilityNote && <p>{detail.disabilityNote}</p>}
+                </div>
+                <div>
+                  <span>Lanche</span>
+                  <strong>{detail.snackOk ? "Pode oferecer" : "Sem lanche liberado"}</strong>
+                  {!detail.snackOk && detail.snackNote && <p>{detail.snackNote}</p>}
+                </div>
+                <div>
+                  <span>Banheiro</span>
+                  <strong>{bathroomOptions.find((o) => o.value === detail.bathroom)?.label || "—"}</strong>
+                  {detail.bathroomNote && <p>{detail.bathroomNote}</p>}
+                </div>
+                <div>
+                  <span>Restrição alimentar</span>
+                  <strong>{detail.foodRestriction ? "Sim" : "Não"}</strong>
+                  {detail.foodRestriction && detail.foodRestrictionNote && <p>{detail.foodRestrictionNote}</p>}
+                </div>
+                <div>
+                  <span>Voltou para a mesa</span>
+                  <strong>{detail.returnedToDesk ? "Sim" : "Não"}</strong>
+                </div>
+                {detail.notes && (
+                  <div className="detail-grid-full">
+                    <span>Observação geral</span>
+                    <p>{detail.notes}</p>
+                  </div>
+                )}
+                <div className="detail-grid-full detail-meta">
+                  <span>
+                    Registrado {detail.createdBy === user.uid ? "por você" : "por outra pessoa da equipe"}
+                    {detail.version > 1 ? " · corrigido depois do registro original" : ""}.
+                  </span>
+                </div>
+              </div>
+              {detail.createdBy === user.uid && minutesSince(detail.createdAt) <= 180 && (
+                <div className="detail-actions">
+                  {detail.createdBy === user.uid && minutesSince(detail.createdAt) <= 120 && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setSelfEdit(detail);
+                        setDetail(null);
+                      }}
+                    >
+                      <Pencil size={16} />
+                      Editar registro
+                    </button>
+                  )}
+                  {detail.createdBy === user.uid && minutesSince(detail.createdAt) <= 180 && (
+                    <button type="button" className="secondary" disabled={togglingId === detail.id} onClick={() => toggleReturned(detail)}>
+                      {togglingId === detail.id ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
+                      {detail.returnedToDesk ? "Desmarcar \"voltou para a mesa\"" : "Marcar \"voltou para a mesa\""}
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </>

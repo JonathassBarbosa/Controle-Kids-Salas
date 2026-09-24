@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import * as api from "./api";
-import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type Role } from "./api";
+import { ApiError, type ApiRecord, type ApiRoom, type ApiSupportGrant, type ApiUser, type Role } from "./api";
 import { ages, careSummary, daysAgo, formatDateBR, genders, roomName, shifts, today } from "./model";
 import { exportPng, exportXlsx } from "./exports";
 import { Choice } from "./choice";
@@ -52,6 +52,8 @@ export default function Management({
   const [age, setAge] = useState("Todos");
   const [gender, setGender] = useState("Todos");
   const [teaFilter, setTeaFilter] = useState("Todos");
+  const [nameSearch, setNameSearch] = useState("");
+  const [returnedFilter, setReturnedFilter] = useState("Todos");
   const [records, setRecords] = useState<ApiRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -96,16 +98,19 @@ export default function Management({
     loadRecords();
   }, [loadRecords]);
 
-  // Nomes dos autores só existem para o administrador (admin.users). Para
-  // gestor/operador mostramos "Você" no próprio registro e um identificador
-  // curto nos demais — a API não devolve nome de autor para esses papéis.
+  // Nomes dos autores: admin.users devolve todos para o administrador, e as
+  // recreadoras das próprias salas para o gestor (mesma ação, escopo
+  // aplicado de verdade pelo servidor) — por isso agora também resolvemos
+  // para gestor, não só para admin. Operador continua vendo "Você" no
+  // próprio registro e um identificador curto nos demais (não pode chamar
+  // admin.users).
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin && !isGestor) return;
     api
       .adminUsers(idToken)
       .then((list) => setUserNames(Object.fromEntries(list.map((u) => [u.uid, u.name]))))
       .catch(() => {});
-  }, [isAdmin, idToken]);
+  }, [isAdmin, isGestor, idToken]);
 
   function authorLabel(uid: string) {
     if (uid === user.uid) return "Você";
@@ -114,14 +119,25 @@ export default function Management({
   }
 
   // Sala/turno/idade/gênero/TEA já são filtrados pelo servidor (records.list);
-  // "records" aqui já chega filtrado — o alias abaixo evita renomear tudo.
-  const filtered = records;
+  // nome da criança e "voltou para a mesa" são filtrados aqui no cliente,
+  // sobre o que já veio do servidor (não exigem ida ao backend). Isso segue
+  // a mesma lógica das métricas existentes: elas continuam calculadas como
+  // sempre foram (contagem de "filtered"), só que agora "filtered" também
+  // responde a esses dois filtros novos, igual já acontecia com os outros.
+  const filtered = records.filter(
+    (r) =>
+      (!nameSearch.trim() || r.childName.toLowerCase().includes(nameSearch.trim().toLowerCase())) &&
+      (returnedFilter === "Todos" || (returnedFilter === "Sim") === r.returnedToDesk)
+  );
   const totalChildren = filtered.length;
   const teaCount = filtered.filter((r) => r.tea).length;
   const disabilityCount = filtered.filter((r) => r.disability).length;
   const foodRestrictionCount = filtered.filter((r) => r.foodRestriction).length;
+  // Métrica NOVA e separada — não substitui nem altera o cálculo de nenhuma
+  // das métricas acima (pedido do cliente: mostrar as duas, sem misturar).
+  const returnedCount = filtered.filter((r) => r.returnedToDesk).length;
   const roomLabel = roomFilter ? roomName(rooms, roomFilter) : isAdmin ? "Todas as salas" : "Todas as minhas salas";
-  const filtersText = `Período: ${start} a ${end}; Sala: ${roomLabel}; Turno: ${shift}; Idade: ${age}; Gênero: ${gender}; TEA: ${teaFilter}`;
+  const filtersText = `Período: ${start} a ${end}; Sala: ${roomLabel}; Turno: ${shift}; Idade: ${age}; Gênero: ${gender}; TEA: ${teaFilter}; Nome: ${nameSearch || "Todos"}; Voltou para a mesa: ${returnedFilter}`;
 
   async function openHistory(record: ApiRecord) {
     setAudit({ record, history: null, loading: true, error: "" });
@@ -150,7 +166,10 @@ export default function Management({
       <TableBody>
         {filtered.map((r) => (
           <TableRow key={r.id}>
-            <TableCell>{r.childName}</TableCell>
+            <TableCell>
+              {r.childName}
+              {r.returnedToDesk && <span className="roster-badge">Voltou p/ mesa</span>}
+            </TableCell>
             <TableCell>{roomName(rooms, r.roomId)}</TableCell>
             <TableCell>
               {formatDateBR(r.date)} · {r.shift}
@@ -173,7 +192,7 @@ export default function Management({
     </Table>
   );
 
-  const tabs = isOperadorOnly ? ["Estoque"] : ["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários"] : []), ...(isAdmin ? ["Salas", "Sistema"] : [])];
+  const tabs = isOperadorOnly ? ["Estoque"] : ["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários", "Ranking"] : []), ...(isAdmin ? ["Salas", "Sistema"] : [])];
 
   return (
     <section className={isOperadorOnly ? "management management-simple" : "management"}>
@@ -220,6 +239,11 @@ export default function Management({
             <Choice label="Faixa etária" value={age} onChange={setAge} options={["Todos", ...ages]} />
             <Choice label="Gênero" value={gender} onChange={setGender} options={["Todos", ...genders]} />
             <Choice label="TEA" value={teaFilter} onChange={setTeaFilter} options={["Todos", "Sim", "Não"]} />
+            <label className="field">
+              Nome da criança
+              <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="Buscar por nome" />
+            </label>
+            <Choice label="Voltou para a mesa" value={returnedFilter} onChange={setReturnedFilter} options={["Todos", "Sim", "Não"]} />
           </div>
 
           {loading && (
@@ -247,6 +271,7 @@ export default function Management({
                   ["Com TEA", teaCount],
                   ["Com deficiência física", disabilityCount],
                   ["Com restrição alimentar", foodRestrictionCount],
+                  ["Retornaram à mesa", returnedCount],
                 ].map(([l, v]) => (
                   <article key={String(l)}>
                     <span>{String(l)}</span>
@@ -300,6 +325,7 @@ export default function Management({
 
       {tab === "Estoque" && <Stock user={user} idToken={idToken} rooms={rooms} onAuthExpired={onAuthExpired} />}
       {tab === "Usuários" && (isAdmin || isGestor) && <UsersPanel idToken={idToken} rooms={rooms} actor={user} onAuthExpired={onAuthExpired} />}
+      {tab === "Ranking" && (isAdmin || isGestor) && <RankingPanel idToken={idToken} actor={user} userNames={userNames} onAuthExpired={onAuthExpired} />}
       {tab === "Salas" && isAdmin && <RoomsPanel idToken={idToken} rooms={rooms} onChanged={onRoomsChanged} onAuthExpired={onAuthExpired} />}
       {tab === "Sistema" && isAdmin && <SystemPanel />}
 
@@ -328,6 +354,298 @@ export default function Management({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+// Ranking de atendimentos por recreadora (agrupado por createdBy — quem
+// criou o registro original; uma correção não muda esse dono). Visível a
+// gestor(a) (só suas salas, já filtrado pelo servidor em records.list) e
+// administrador (todas as salas).
+function RankingPanel({
+  idToken,
+  actor,
+  userNames,
+  onAuthExpired,
+}: {
+  idToken: string;
+  actor: ApiUser;
+  userNames: Record<string, string>;
+  onAuthExpired: (message?: string) => void;
+}) {
+  const [start, setStart] = useState(daysAgo(30));
+  const [end, setEnd] = useState(today());
+  const [records, setRecords] = useState<ApiRecord[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+
+  const authGuard = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiError && err.code === "AUTH") {
+        onAuthExpired("Sua sessão expirou. Entre novamente.");
+        return true;
+      }
+      return false;
+    },
+    [onAuthExpired]
+  );
+
+  const load = useCallback(async () => {
+    if (start > end) return;
+    setLoading(true);
+    setLoadError("");
+    try {
+      const { records: all } = await api.listAllRecords(idToken, { from: start, to: end });
+      setRecords(all);
+    } catch (err) {
+      if (authGuard(err)) return;
+      setLoadError(err instanceof ApiError ? err.message : "Não foi possível carregar o ranking agora.");
+    } finally {
+      setLoading(false);
+    }
+  }, [idToken, start, end, authGuard]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  function nameFor(uid: string) {
+    if (uid === actor.uid) return "Você";
+    return userNames[uid] || "Colaborador " + short(uid);
+  }
+
+  const ranking = useMemo(() => {
+    if (!records) return [];
+    const counts = new Map<string, number>();
+    records.forEach((r) => counts.set(r.createdBy, (counts.get(r.createdBy) || 0) + 1));
+    return [...counts.entries()].map(([uid, count]) => ({ uid, count })).sort((a, b) => b.count - a.count);
+  }, [records]);
+
+  return (
+    <>
+      <h2>Recreadora com mais atendimentos</h2>
+      <div className="filters">
+        <label className="field">
+          De
+          <input type="date" value={start} max={end} onChange={(e) => setStart(e.target.value)} />
+        </label>
+        <label className="field">
+          Até
+          <input type="date" value={end} min={start} max={today()} onChange={(e) => setEnd(e.target.value)} />
+        </label>
+      </div>
+      {loading && (
+        <p className="data-note">
+          <Loader2 size={16} className="spin" style={{ verticalAlign: "middle", marginRight: 8 }} />
+          Carregando…
+        </p>
+      )}
+      {loadError && (
+        <p className="error-message" role="alert">
+          {loadError}{" "}
+          <button className="link-button" onClick={load}>
+            Tentar novamente
+          </button>
+        </p>
+      )}
+      {start > end ? (
+        <p role="alert">A data inicial deve ser anterior à final.</p>
+      ) : !loading && !loadError ? (
+        ranking.length === 0 ? (
+          <p className="empty-message">Nenhum atendimento registrado neste período.</p>
+        ) : (
+          <>
+            <ol className="ranking-list">
+              {ranking.map((row, i) => (
+                <li key={row.uid} className={i === 0 ? "ranking-first" : ""}>
+                  <span className="ranking-position">{i + 1}º</span>
+                  <strong>{nameFor(row.uid)}</strong>
+                  <span className="ranking-count">
+                    {row.count} atendimento{row.count === 1 ? "" : "s"}
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <p className="data-note">
+              Contagem de crianças registradas por quem CRIOU o registro original (createdBy); uma correção feita por outra pessoa não muda esse dono.
+            </p>
+          </>
+        )
+      ) : null}
+    </>
+  );
+}
+
+// Apoio temporário entre salas: gestor concede a uma recreadora das suas
+// próprias salas acesso a outra sala ativa por 12/24/48h; admin pode
+// conceder para qualquer recreadora. O servidor decide de verdade quem pode
+// conceder/revogar o quê — esta tela só oferece a interface.
+function SupportPanel({
+  idToken,
+  actor,
+  rooms,
+  operators,
+  onAuthExpired,
+}: {
+  idToken: string;
+  actor: ApiUser;
+  rooms: ApiRoom[];
+  operators: ApiUser[];
+  onAuthExpired: (message?: string) => void;
+}) {
+  const [grants, setGrants] = useState<ApiSupportGrant[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [form, setForm] = useState<{ uid: string; roomId: string; hours: 12 | 24 | 48 }>({ uid: "", roomId: "", hours: 24 });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const authGuard = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiError && err.code === "AUTH") {
+        onAuthExpired("Sua sessão expirou. Entre novamente.");
+        return true;
+      }
+      return false;
+    },
+    [onAuthExpired]
+  );
+
+  const load = useCallback(async () => {
+    setLoadError("");
+    try {
+      setGrants(await api.supportList(idToken));
+    } catch (err) {
+      if (authGuard(err)) return;
+      setLoadError(err instanceof ApiError ? err.message : "Não foi possível carregar os apoios.");
+    }
+  }, [idToken, authGuard]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const activeRooms = rooms.filter((r) => r.active);
+
+  async function grant() {
+    if (!form.uid || !form.roomId) {
+      setError("Selecione a recreadora e a sala de apoio.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await api.supportGrant(idToken, form.uid, form.roomId, form.hours);
+      setForm((f) => ({ ...f, roomId: "" }));
+      await load();
+    } catch (err) {
+      if (authGuard(err)) return;
+      setError(err instanceof ApiError ? err.message : "Não foi possível conceder o apoio.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function revoke(apoioId: string) {
+    try {
+      await api.supportRevoke(idToken, apoioId);
+      await load();
+    } catch (err) {
+      if (authGuard(err)) return;
+      alert(err instanceof ApiError ? err.message : "Não foi possível revogar o apoio.");
+    }
+  }
+
+  function nameFor(uid: string) {
+    return operators.find((o) => o.uid === uid)?.name || "Colaborador " + short(uid);
+  }
+
+  function status(g: ApiSupportGrant) {
+    if (g.revoked) return "Revogado";
+    if (g.expiresAt <= Date.now()) return "Expirado";
+    return "Ativo";
+  }
+
+  return (
+    <div className="support-panel">
+      <h2>Apoio temporário entre salas</h2>
+      <p className="data-note">
+        Envie uma recreadora {actor.role === "gestor" ? "das suas salas" : ""} para apoiar outra sala por 12, 24 ou 48 horas. Passado o prazo (ou se você revogar
+        antes), a sala extra some sozinha do acesso dela — os registros feitos na sala de apoio continuam no histórico normalmente.
+      </p>
+      <div className="filters">
+        <Choice
+          label="Recreadora"
+          value={form.uid}
+          onChange={(v) => setForm((f) => ({ ...f, uid: v }))}
+          options={["", ...operators.map((o) => o.uid)]}
+          optionLabels={{ "": "Selecione", ...Object.fromEntries(operators.map((o) => [o.uid, o.name])) }}
+        />
+        <Choice
+          label="Sala de apoio"
+          value={form.roomId}
+          onChange={(v) => setForm((f) => ({ ...f, roomId: v }))}
+          options={["", ...activeRooms.map((r) => r.id)]}
+          optionLabels={{ "": "Selecione", ...Object.fromEntries(activeRooms.map((r) => [r.id, r.name])) }}
+        />
+        <Choice
+          label="Duração"
+          value={String(form.hours)}
+          onChange={(v) => setForm((f) => ({ ...f, hours: Number(v) as 12 | 24 | 48 }))}
+          options={["12", "24", "48"]}
+          optionLabels={{ "12": "12 horas", "24": "24 horas", "48": "48 horas" }}
+        />
+        <button disabled={saving} onClick={grant}>
+          {saving ? "Concedendo…" : "Conceder apoio"}
+        </button>
+      </div>
+      {error && (
+        <p className="error-message" role="alert">
+          {error}
+        </p>
+      )}
+      {loadError && (
+        <p className="error-message" role="alert">
+          {loadError}{" "}
+          <button className="link-button" onClick={load}>
+            Tentar novamente
+          </button>
+        </p>
+      )}
+      {grants &&
+        (grants.length === 0 ? (
+          <p className="empty-message">Nenhum apoio concedido ainda.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {["Recreadora", "Sala de apoio", "Duração", "Status", "Concedido em", ""].map((h) => (
+                  <TableHead key={h}>{h}</TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {grants
+                .slice()
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+                .map((g) => (
+                  <TableRow key={g.apoioId}>
+                    <TableCell>{nameFor(g.uid)}</TableCell>
+                    <TableCell>{roomName(rooms, g.roomId)}</TableCell>
+                    <TableCell>{g.hours}h</TableCell>
+                    <TableCell>{status(g)}</TableCell>
+                    <TableCell>{new Date(g.createdAt).toLocaleString("pt-BR")}</TableCell>
+                    <TableCell>
+                      {status(g) === "Ativo" && (
+                        <button className="link-button" onClick={() => revoke(g.apoioId)}>
+                          Revogar
+                        </button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+            </TableBody>
+          </Table>
+        ))}
+    </div>
   );
 }
 
@@ -491,6 +809,8 @@ function UsersPanel({
           </TableBody>
         </Table>
       )}
+
+      <SupportPanel idToken={idToken} actor={actor} rooms={rooms} operators={(users || []).filter((u) => u.role === "operador")} onAuthExpired={onAuthExpired} />
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent>

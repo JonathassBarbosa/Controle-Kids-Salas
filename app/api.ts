@@ -15,6 +15,14 @@
 // (admin.users/admin.saveUser aceitam o papel gestor com escopo restrito às
 // próprias salas). Acrescenta também o controle de estoque por sala
 // (stock.save/stock.list/stock.history) — ver ApiStockEntry abaixo.
+//
+// v5: (a) apoio temporário entre salas — support.grant/support.revoke/
+// support.list, ver ApiSupportGrant abaixo; enquanto ativo, a sala extra
+// aparece em user.roomIds de "me" automaticamente (o backend já mescla,
+// nada a fazer aqui além de reconsultar "me"/roomIds normalmente); (b)
+// campo returnedToDesk em ApiRecord ("voltou para a mesa de apresentação"),
+// alternado só pela nova ação records.toggleReturned — nunca por
+// records.save, que sempre preserva o valor atual em correções.
 import { loadConfig } from "./config";
 
 export type Role = "operador" | "gestor" | "admin";
@@ -56,10 +64,24 @@ export interface ApiRecord {
   foodRestriction: boolean;
   foodRestrictionNote: string;
   notes: string;
+  returnedToDesk: boolean;
   createdBy: string;
   createdAt: string;
   updatedBy: string;
   updatedAt: string;
+}
+
+export interface ApiSupportGrant {
+  apoioId: string;
+  uid: string;
+  roomId: string;
+  grantedBy: string;
+  hours: number;
+  createdAt: string;
+  expiresAt: number;
+  revoked: boolean;
+  revokedAt: string;
+  revokedBy: string;
 }
 
 export interface MeResponse {
@@ -264,6 +286,30 @@ export function saveRecord(idToken: string, record: SaveRecordInput) {
 }
 export function recordHistory(idToken: string, recordId: string) {
   return call<ApiRecord[]>("records.history", { idToken, recordId });
+}
+// Alterna "Voltou para a mesa" (reversível). requestId novo a cada chamada —
+// reenviar o MESMO requestId (ex. clique duplo) retorna o mesmo resultado
+// sem alternar de novo. Prazo: operador só o próprio registro em até 3h;
+// gestor/admin seguem o mesmo prazo de correção de records.save (7 dias /
+// sem prazo).
+export function toggleReturned(idToken: string, recordId: string, requestId: string) {
+  return call<ApiRecord>("records.toggleReturned", { idToken, recordId, requestId });
+}
+// Apoio temporário entre salas: gestor concede a uma recreadora DAS SUAS
+// PRÓPRIAS salas acesso a qualquer outra sala ativa por 12/24/48h; a sala
+// concedida passa a aparecer em roomIds da recreadora (via "me") enquanto
+// ativa, e some sozinha ao expirar. Admin pode conceder para qualquer
+// recreadora.
+export function supportGrant(idToken: string, uid: string, roomId: string, hours: 12 | 24 | 48) {
+  return call<ApiSupportGrant>("support.grant", { idToken, uid, roomId, hours });
+}
+export function supportRevoke(idToken: string, apoioId: string) {
+  return call<ApiSupportGrant>("support.revoke", { idToken, apoioId });
+}
+// Lista apoios visíveis ao chamador (admin: todos; gestor: os que concedeu +
+// os de recreadoras das suas salas), incluindo ativos/expirados/revogados.
+export function supportList(idToken: string) {
+  return call<ApiSupportGrant[]>("support.list", { idToken });
 }
 export function adminUsers(idToken: string) {
   return call<ApiUser[]>("admin.users", { idToken });
