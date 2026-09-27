@@ -311,6 +311,10 @@ export function supportRevoke(idToken: string, apoioId: string) {
 export function supportList(idToken: string) {
   return call<ApiSupportGrant[]>("support.list", { idToken });
 }
+// Todas as salas ativas (gestor/admin), só para escolher o destino de um apoio.
+export function supportRooms(idToken: string) {
+  return call<ApiRoom[]>("support.rooms", { idToken });
+}
 export function adminUsers(idToken: string) {
   return call<ApiUser[]>("admin.users", { idToken });
 }

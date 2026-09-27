@@ -523,7 +523,28 @@ function SupportPanel({
     load();
   }, [load]);
 
-  const activeRooms = rooms.filter((r) => r.active);
+  // O gestor só recebe as próprias salas em "me"; a sala de destino do apoio
+  // pode ser qualquer sala ativa, então buscamos a lista completa à parte.
+  const [allRooms, setAllRooms] = useState<ApiRoom[] | null>(null);
+  const [roomsError, setRoomsError] = useState("");
+  const loadRooms = useCallback(async () => {
+    setRoomsError("");
+    try {
+      setAllRooms(await api.supportRooms(idToken));
+    } catch (err) {
+      if (authGuard(err)) return;
+      setRoomsError(err instanceof ApiError ? err.message : "Não foi possível carregar as salas.");
+    }
+  }, [idToken, authGuard]);
+  useEffect(() => {
+    loadRooms();
+  }, [loadRooms]);
+
+  const roomPool = allRooms || rooms;
+  const selectedOperator = operators.find((o) => o.uid === form.uid);
+  const activeRooms = roomPool
+    .filter((r) => r.active && !(selectedOperator && selectedOperator.roomIds.includes(r.id)))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
 
   async function grant() {
     if (!form.uid || !form.roomId) {
@@ -575,7 +596,7 @@ function SupportPanel({
         <Choice
           label="Recreadora"
           value={form.uid}
-          onChange={(v) => setForm((f) => ({ ...f, uid: v }))}
+          onChange={(v) => setForm((f) => ({ ...f, uid: v, roomId: "" }))}
           options={["", ...operators.map((o) => o.uid)]}
           optionLabels={{ "": "Selecione", ...Object.fromEntries(operators.map((o) => [o.uid, o.name])) }}
         />
@@ -600,6 +621,14 @@ function SupportPanel({
       {error && (
         <p className="error-message" role="alert">
           {error}
+        </p>
+      )}
+      {roomsError && (
+        <p className="error-message" role="alert">
+          {roomsError}{" "}
+          <button className="link-button" onClick={loadRooms}>
+            Tentar novamente
+          </button>
         </p>
       )}
       {loadError && (
@@ -629,7 +658,7 @@ function SupportPanel({
                 .map((g) => (
                   <TableRow key={g.apoioId}>
                     <TableCell>{nameFor(g.uid)}</TableCell>
-                    <TableCell>{roomName(rooms, g.roomId)}</TableCell>
+                    <TableCell>{roomName(roomPool, g.roomId)}</TableCell>
                     <TableCell>{g.hours}h</TableCell>
                     <TableCell>{status(g)}</TableCell>
                     <TableCell>{new Date(g.createdAt).toLocaleString("pt-BR")}</TableCell>
