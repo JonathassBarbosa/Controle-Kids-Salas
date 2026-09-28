@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Accessibility,
   Baby,
@@ -11,6 +11,7 @@ import {
   Loader2,
   Pencil,
   PhoneCall,
+  CloudOff,
   RefreshCw,
   Salad,
   ShieldCheck,
@@ -23,6 +24,7 @@ import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type Bathroom } f
 import { ages, bathroomOptions, careSummary, daysAgo, draftSignature, emptyDraft, formatDateBR, genders, minutesSince, roomName, shifts, suggestedShift, today, validateEntryDraft, type EntryDraft } from "./model";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Choice } from "./choice";
+import { enqueueRecord, isConnectivityError, loadRosterCache, onOutboxChange, pendingRecordsFor, saveRosterCache } from "./offline";
 
 function YesNo({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
   return <Choice label={label} value={value ? "sim" : "nao"} onChange={(v) => onChange(v === "sim")} options={["sim", "nao"]} optionLabels={{ sim: "Sim", nao: "Não" }} />;
@@ -87,6 +89,7 @@ export default function Register({
   const [dateOpen, setDateOpen] = useState(false);
   const [step, setStep] = useState(1);
   const [saved, setSaved] = useState<ApiRecord | null>(null);
+  const [savedOffline, setSavedOffline] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<{ id: string; signature: string } | null>(null);
@@ -107,6 +110,22 @@ export default function Register({
   const [roster, setRoster] = useState<ApiRecord[] | null>(null);
   const [rosterError, setRosterError] = useState(false);
   const [rosterTick, setRosterTick] = useState(0);
+  const [rosterFromCache, setRosterFromCache] = useState(false);
+  // Itens guardados no aparelho (fila offline) desta sala/data/turno.
+  const [outboxTick, setOutboxTick] = useState(0);
+  useEffect(() => onOutboxChange(() => setOutboxTick((t) => t + 1)), []);
+  const pendingHere = useMemo(
+    () => (draft.roomId && draft.date && draft.shift ? pendingRecordsFor(user.uid, draft.roomId, draft.date, draft.shift) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user.uid, draft.roomId, draft.date, draft.shift, outboxTick]
+  );
+  // Quando a fila diminui (algo foi sincronizado), recarrega a lista do servidor.
+  const pendingCount = pendingHere.length;
+  const prevPending = useRef(pendingCount);
+  useEffect(() => {
+    if (pendingCount < prevPending.current) setRosterTick((t) => t + 1);
+    prevPending.current = pendingCount;
+  }, [pendingCount]);
   const [detail, setDetail] = useState<ApiRecord | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
@@ -144,10 +163,27 @@ export default function Register({
     }
     let cancelled = false;
     setRosterError(false);
+    const cached = loadRosterCache(draft.roomId, draft.date, draft.shift);
+    const fallbackToCache = () => {
+      if (cached) {
+        setRoster(cached);
+        setRosterFromCache(true);
+      } else {
+        setRoster([]);
+        setRosterError(true);
+      }
+    };
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      fallbackToCache();
+      return;
+    }
     api
       .listAllRecords(idToken, { from: draft.date, to: draft.date, roomId: draft.roomId, shift: draft.shift })
       .then((res) => {
-        if (!cancelled) setRoster(res.records);
+        if (cancelled) return;
+        setRoster(res.records);
+        setRosterFromCache(false);
+        saveRosterCache(draft.roomId, draft.date, draft.shift, res.records);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -155,7 +191,7 @@ export default function Register({
           onAuthExpired();
           return;
         }
-        setRosterError(true);
+        fallbackToCache();
       });
     return () => {
       cancelled = true;
@@ -164,6 +200,11 @@ export default function Register({
   }, [idToken, draft.roomId, draft.date, draft.shift, rosterTick]);
 
   const selectedRoomName = draft.roomId ? roomName(rooms, draft.roomId) : "";
+  // Check-in feito offline que ainda está na fila (some quando sincroniza).
+  const queuedRow = savedOffline && saved ? pendingHere.find((r) => r.id === saved.id) : undefined;
+  const stillQueued = !!queuedRow;
+  type RosterRow = ApiRecord & { _pending?: "pending" | "failed"; _error?: string };
+  const rosterRows: RosterRow[] | null = roster == null ? null : [...roster, ...pendingHere];
 
   async function save() {
     if (!draft.roomId) {
@@ -186,8 +227,7 @@ export default function Register({
 
     setSaving(true);
     setError("");
-    try {
-      const result = await api.saveRecord(idToken, {
+    const payload = {
         id: draft.id ?? undefined,
         version: draft.version ?? undefined,
         requestId,
@@ -207,14 +247,42 @@ export default function Register({
         foodRestriction: draft.foodRestriction,
         foodRestrictionNote: draft.foodRestrictionNote.trim(),
         notes: draft.notes.trim(),
-      });
+      };
+    const isNew = !draft.id;
+    // Sem internet: um check-in NOVO vai para a fila do aparelho e é enviado
+    // sozinho depois (mesmo requestId, então nunca duplica). Correções exigem internet.
+    const keepOffline = () => {
+      if (!enqueueRecord(user.uid, payload)) {
+        setError("Sem internet e não foi possível guardar neste aparelho (armazenamento cheio ou bloqueado). Anote os dados e tente de novo.");
+        return;
+      }
+      const ghost = pendingRecordsFor(user.uid, payload.roomId, payload.date, payload.shift).find((r) => r.id === "pendente:" + requestId) || null;
+      setPending(null);
+      setSaved(ghost);
+      setSavedOffline(true);
+    };
+    try {
+      if (isNew && typeof navigator !== "undefined" && navigator.onLine === false) {
+        keepOffline();
+        return;
+      }
+      const result = await api.saveRecord(idToken, payload);
       setPending(null);
       setSaved(result);
+      setSavedOffline(false);
       setRosterTick((t) => t + 1);
       onSaved(result);
     } catch (err) {
       if (err instanceof ApiError && err.code === "AUTH") {
         onAuthExpired();
+        return;
+      }
+      if (isNew && isConnectivityError(err)) {
+        keepOffline();
+        return;
+      }
+      if (!isNew && isConnectivityError(err)) {
+        setError("Sem conexão com o servidor. Correções precisam de internet — tente de novo quando a conexão voltar.");
         return;
       }
       setError(err instanceof ApiError ? err.message : "Não foi possível salvar agora. Tente novamente.");
@@ -229,6 +297,7 @@ export default function Register({
     setDraft((d) => emptyDraft(keepRoomAndShift ? d.roomId : allowedRooms[0]?.id || "", keepRoomAndShift ? d.date : today(), keepRoomAndShift ? d.shift : suggestedShift()));
     setStep(1);
     setSaved(null);
+    setSavedOffline(false);
     setError("");
     setPending(null);
   }
@@ -324,11 +393,17 @@ export default function Register({
         <section className="form-card">
           {saved ? (
             <div className="success-state">
-              <div className="success-icon">
-                <Check size={36} />
+              <div className={stillQueued ? "success-icon offline" : "success-icon"}>
+                {stillQueued ? <CloudOff size={34} /> : <Check size={36} />}
               </div>
-              <p className="eyebrow">REGISTRO CONFIRMADO PELO SERVIDOR</p>
-              <h2>{effectiveEditTarget ? "Correção salva!" : "Check-in registrado!"}</h2>
+              <p className="eyebrow">{stillQueued ? "GUARDADO NESTE APARELHO" : savedOffline ? "ENVIADO AO SERVIDOR" : "REGISTRO CONFIRMADO PELO SERVIDOR"}</p>
+              <h2>{stillQueued ? "Check-in guardado!" : effectiveEditTarget ? "Correção salva!" : "Check-in registrado!"}</h2>
+              {queuedRow?._pending === "pending" && <p className="offline-note">Sem internet agora. Ele será enviado sozinho quando a conexão voltar — pode seguir registrando normalmente.</p>}
+              {queuedRow?._pending === "failed" && (
+                <p className="error-message" role="alert">
+                  O servidor não aceitou este check-in: {queuedRow._error || "motivo não informado"}.
+                </p>
+              )}
               <p>
                 {saved.childName} · {formatDateBR(saved.date)} · {saved.shift} · {roomName(rooms, saved.roomId)}.
               </p>
@@ -515,29 +590,36 @@ export default function Register({
               <header>
                 <Sparkles size={16} />
                 <span>
-                  Crianças já registradas nesta sala/turno {roster != null && `(${roster.length})`}
+                  Crianças já registradas nesta sala/turno {rosterRows != null && `(${rosterRows.length})`}
                 </span>
                 <button type="button" aria-label="Atualizar lista" onClick={() => setRosterTick((t) => t + 1)}>
                   <RefreshCw size={14} />
                 </button>
               </header>
-              {rosterError ? (
-                <p className="roster-empty">Não foi possível carregar a lista agora.</p>
-              ) : roster == null ? (
+              {(rosterError || rosterFromCache) && (
+                <p className="roster-empty">
+                  {rosterFromCache ? "Sem conexão: mostrando a última lista carregada neste aparelho." : "Não foi possível carregar a lista do servidor agora."}
+                  {pendingHere.length > 0 ? " Os registros guardados neste aparelho aparecem abaixo." : ""}
+                </p>
+              )}
+              {rosterRows == null ? (
                 <p className="roster-empty">Carregando…</p>
-              ) : roster.length === 0 ? (
-                <p className="roster-empty">Nenhuma criança registrada ainda neste turno.</p>
+              ) : rosterRows.length === 0 ? (
+                !rosterError && <p className="roster-empty">Nenhuma criança registrada ainda neste turno.</p>
               ) : (
                 <ul>
-                  {roster.map((r) => {
+                  {rosterRows.map((r) => {
                     const own = r.createdBy === user.uid;
-                    const canQuickEdit = own && minutesSince(r.createdAt) <= 120;
-                    const canToggleReturned = own && minutesSince(r.createdAt) <= 180;
+                    const synced = !r._pending;
+                    const canQuickEdit = synced && own && minutesSince(r.createdAt) <= 120;
+                    const canToggleReturned = synced && own && minutesSince(r.createdAt) <= 180;
                     return (
                       <li key={r.id} className="roster-item-clickable" onClick={() => setDetail(r)}>
                         <strong>
                           {r.childName}
                           {r.returnedToDesk && <span className="roster-badge">Voltou para a mesa</span>}
+                          {r._pending === "pending" && <span className="roster-badge pending">Aguardando envio</span>}
+                          {r._pending === "failed" && <span className="roster-badge failed">Não enviado</span>}
                         </strong>
                         <span>
                           {r.age} · {r.gender}
@@ -668,7 +750,10 @@ export default function Register({
                   </span>
                 </div>
               </div>
-              {detail.createdBy === user.uid && minutesSince(detail.createdAt) <= 180 && (
+              {detail.id.startsWith("pendente:") && (
+                <p className="offline-note">Guardado neste aparelho, ainda não enviado ao servidor. Editar e &quot;voltou para a mesa&quot; ficam disponíveis assim que ele for enviado.</p>
+              )}
+              {!detail.id.startsWith("pendente:") && detail.createdBy === user.uid && minutesSince(detail.createdAt) <= 180 && (
                 <div className="detail-actions">
                   {detail.createdBy === user.uid && minutesSince(detail.createdAt) <= 120 && (
                     <button

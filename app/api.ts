@@ -131,6 +131,8 @@ export interface LoginResponse {
   token: string;
   expiresIn: string;
   user: ApiUser;
+  // v5.2: o login já traz os dados de "me" (poupa uma chamada). Ausente em backends antigos.
+  me?: MeResponse;
 }
 
 export interface ListRecordsParams {
@@ -247,8 +249,21 @@ async function call<T>(action: string, body: Record<string, unknown> = {}, timeo
   return parsed.data as T;
 }
 
-export function login(username: string, password: string) {
-  return call<LoginResponse>("login", { username, password });
+// Login com mais paciência e uma nova tentativa automática: o Apps Script pode
+// levar vários segundos para "acordar" na primeira chamada do dia, e uma queda
+// rápida de rede no celular não deve virar erro na cara da recreadora.
+// Repetir o login é seguro (no máximo cria uma sessão extra no servidor).
+export async function login(username: string, password: string, onRetry?: () => void) {
+  try {
+    return await call<LoginResponse>("login", { username, password }, 40000);
+  } catch (err) {
+    if (err instanceof ApiError && ["TIMEOUT", "OFFLINE", "BUSY", "BAD_RESPONSE"].includes(err.code) && (typeof navigator === "undefined" || navigator.onLine !== false)) {
+      onRetry?.();
+      await new Promise((r) => setTimeout(r, 1500));
+      return call<LoginResponse>("login", { username, password }, 40000);
+    }
+    throw err;
+  }
 }
 export function logout(idToken: string) {
   return call<{ message: string }>("logout", { idToken });

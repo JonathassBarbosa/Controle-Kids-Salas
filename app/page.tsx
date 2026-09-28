@@ -9,6 +9,8 @@ import { clearSession, loadSession, saveSession } from "./session";
 import Login from "./login";
 import Register from "./register";
 import Management from "./management";
+import SyncBar from "./syncbar";
+import { clearMeCache, loadMeCache, outbox, saveMeCache } from "./offline";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 type Boot = { status: "loading" } | { status: "config-missing" } | { status: "offline"; message: string } | { status: "anon"; notice?: string } | { status: "ready"; idToken: string; user: ApiUser; rooms: ApiRoom[] };
@@ -33,19 +35,36 @@ export default function App() {
       return;
     }
     const stored = loadSession();
-    if (!stored || stored.expiresAt <= Date.now()) {
-      if (stored) clearSession();
+    const noNetwork = typeof navigator !== "undefined" && navigator.onLine === false;
+    if (!stored) {
       setBoot({ status: "anon" });
       return;
     }
+    // Sessão vencida: com internet, pede login de novo. Sem internet, deixa a
+    // recreadora continuar trabalhando offline com os dados já guardados; o
+    // login é pedido quando a conexão voltar (antes de enviar a fila).
+    const expired = stored.expiresAt <= Date.now();
+    if (expired && !noNetwork) {
+      clearSession();
+      setBoot({ status: "anon", notice: outbox(stored.user.uid).length ? "Sua sessão expirou. Entre novamente para enviar os registros guardados neste aparelho." : undefined });
+      return;
+    }
     try {
+      if (expired || noNetwork) throw new ApiError("OFFLINE", "Sem internet.");
       const data = await api.me(stored.idToken);
+      saveMeCache(data);
       setView(data.user.role === "admin" ? "manage" : "register");
       setBoot({ status: "ready", idToken: stored.idToken, user: data.user, rooms: data.rooms });
     } catch (err) {
       if (err instanceof ApiError && (err.code === "AUTH" || err.code === "FORBIDDEN")) {
         clearSession();
         setBoot({ status: "anon" });
+        return;
+      }
+      const cached = loadMeCache(stored.user.uid);
+      if (cached) {
+        setView(cached.user.role === "admin" ? "manage" : "register");
+        setBoot({ status: "ready", idToken: stored.idToken, user: cached.user, rooms: cached.rooms });
       } else {
         setBoot({ status: "offline", message: err instanceof ApiError ? err.message : "Não foi possível conectar ao servidor." });
       }
@@ -60,7 +79,8 @@ export default function App() {
     const expiresAt = Date.now() + Number(res.expiresIn || "28800") * 1000;
     saveSession({ idToken: res.idToken, user: res.user, expiresAt });
     try {
-      const data = await api.me(res.idToken);
+      const data = res.me && res.me.user ? res.me : await api.me(res.idToken);
+      saveMeCache(data);
       setView(data.user.role === "admin" ? "manage" : "register");
       setBoot({ status: "ready", idToken: res.idToken, user: data.user, rooms: data.rooms });
     } catch {
@@ -69,30 +89,37 @@ export default function App() {
     }
   }
 
-  function onAuthExpired(message?: string) {
+  const onAuthExpired = useCallback((message?: string) => {
     clearSession();
     setEditTarget(null);
     setBoot({ status: "anon", notice: message });
-  }
+  }, []);
 
   async function doLogout() {
     if (boot.status === "ready") {
+      const n = outbox(boot.user.uid).filter((i) => i.status === "pending").length;
+      if (n > 0 && !window.confirm(`Há ${n === 1 ? "1 registro ainda não enviado" : `${n} registros ainda não enviados`}. Eles continuam guardados neste aparelho e serão enviados quando você entrar de novo. Sair mesmo assim?`)) return;
       api.logout(boot.idToken).catch(() => {});
     }
     clearSession();
+    clearMeCache();
     setEditTarget(null);
     setBoot({ status: "anon" });
   }
 
-  function refreshRooms() {
-    if (boot.status !== "ready") return;
+  const readyToken = boot.status === "ready" ? boot.idToken : "";
+  const refreshRooms = useCallback(() => {
+    if (!readyToken) return;
     api
-      .me(boot.idToken)
-      .then((data) => setBoot({ status: "ready", idToken: boot.idToken, user: data.user, rooms: data.rooms }))
+      .me(readyToken)
+      .then((data) => {
+        saveMeCache(data);
+        setBoot({ status: "ready", idToken: readyToken, user: data.user, rooms: data.rooms });
+      })
       .catch((err) => {
         if (err instanceof ApiError && err.code === "AUTH") onAuthExpired("Sua sessão expirou. Entre novamente.");
       });
-  }
+  }, [readyToken, onAuthExpired]);
 
   if (boot.status === "loading") {
     return (
@@ -191,6 +218,8 @@ export default function App() {
             </span>
           </button>
         </header>
+
+        <SyncBar idToken={idToken} uid={user.uid} rooms={rooms} onAuthExpired={onAuthExpired} onReconnect={refreshRooms} />
 
         {view === "register" ? (
           <Register

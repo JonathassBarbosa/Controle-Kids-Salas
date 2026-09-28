@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Eye, EyeOff, KeyRound, Loader2, LogIn, Mail } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type LoginResponse } from "./api";
@@ -20,20 +20,36 @@ export default function Login({ onLoggedIn, initialNotice }: { onLoggedIn: (res:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(initialNotice || "");
+  const [progress, setProgress] = useState("");
+
+  // "Acorda" o Apps Script assim que a tela de login abre: a primeira chamada
+  // depois de um tempo parado costuma ser a mais lenta. Enquanto a pessoa
+  // digita usuário e senha, o servidor já fica pronto.
+  useEffect(() => {
+    api.ping().catch(() => {});
+  }, []);
 
   async function submitLogin() {
     if (!username.trim() || !password) {
       setError("Informe usuário e senha.");
       return;
     }
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setError("Sem internet no momento. Conecte-se para entrar — depois do primeiro login, o app funciona mesmo sem conexão.");
+      return;
+    }
     setBusy(true);
     setError("");
+    setProgress("");
+    const slow = setTimeout(() => setProgress("Conectando ao servidor… a primeira entrada do dia pode levar alguns segundos."), 5000);
     try {
-      const res = await api.login(username.trim(), password);
+      const res = await api.login(username.trim(), password, () => setProgress("A conexão está lenta. Tentando de novo automaticamente…"));
       onLoggedIn(res);
     } catch (err) {
       setError(errorMessage(err, "Não foi possível entrar. Tente novamente."));
     } finally {
+      clearTimeout(slow);
+      setProgress("");
       setBusy(false);
     }
   }
@@ -127,8 +143,13 @@ export default function Login({ onLoggedIn, initialNotice }: { onLoggedIn: (res:
               </label>
               <button className="primary auth-submit" type="submit" disabled={busy}>
                 {busy ? <Loader2 size={19} className="spin" /> : <LogIn size={19} />}
-                Entrar
+                {busy ? "Entrando…" : "Entrar"}
               </button>
+              {busy && progress && (
+                <p className="auth-progress" role="status">
+                  {progress}
+                </p>
+              )}
             </form>
             <button
               className="link-button auth-link"

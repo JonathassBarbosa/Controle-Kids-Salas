@@ -1,6 +1,6 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Candy, Check, Loader2, Pencil, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Candy, Check, CloudOff, Loader2, Pencil, RefreshCw } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRoom, type ApiStockEntry, type ApiUser } from "./api";
 import { STOCK_ITEMS, daysAgo, emptyStockQty, formatDateBR, roomName, stockQtyFromEntry, stockSignature, today, validateStockQty } from "./model";
@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Choice } from "./choice";
+import { enqueueStock, isConnectivityError, onOutboxChange, pendingStockFor } from "./offline";
 
 // Grade dos 16 insumos fixos, usada tanto no lançamento diário quanto no
 // ajuste. `disabled` trava os campos quando quem está olhando não pode
@@ -85,6 +86,15 @@ export default function Stock({
   const [formError, setFormError] = useState("");
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState<{ id: string; signature: string } | null>(null);
+  // Lançamento de hoje guardado no aparelho (sem internet), ainda não enviado.
+  const [outboxTick, setOutboxTick] = useState(0);
+  useEffect(() => onOutboxChange(() => setOutboxTick((t) => t + 1)), []);
+  const queued = useMemo(
+    () => (roomId ? pendingStockFor(user.uid, roomId, today()) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user.uid, roomId, outboxTick]
+  );
+  const [offlineView, setOfflineView] = useState(false);
 
   const loadToday = useCallback(async () => {
     if (!roomId) {
@@ -93,15 +103,29 @@ export default function Stock({
     }
     setTodayEntry(undefined);
     setTodayError("");
+    setOfflineView(false);
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setOfflineView(true);
+      setTodayEntry(null);
+      return;
+    }
     try {
       const { entries } = await api.stockList(idToken, { from: today(), to: today(), roomId });
       setTodayEntry(entries[0] || null);
     } catch (err) {
       if (authGuard(err)) return;
-      setTodayError(err instanceof ApiError ? err.message : "Não foi possível verificar o lançamento de hoje.");
+      if (isConnectivityError(err)) setOfflineView(true);
+      else setTodayError(err instanceof ApiError ? err.message : "Não foi possível verificar o lançamento de hoje.");
       setTodayEntry(null);
     }
   }, [idToken, roomId, authGuard]);
+
+  // Quando a fila de estoque desta sala é enviada, recarrega do servidor.
+  const hadQueued = useRef(!!queued);
+  useEffect(() => {
+    if (hadQueued.current && !queued) loadToday();
+    hadQueued.current = !!queued;
+  }, [queued, loadToday]);
 
   useEffect(() => {
     loadToday();
@@ -112,9 +136,10 @@ export default function Stock({
     setFormError("");
     setEditingToday(false);
     if (todayEntry) setQty(stockQtyFromEntry(todayEntry));
+    else if (queued) setQty({ ...emptyStockQty(), ...queued.payload.qty });
     else setQty(emptyStockQty());
-    setNotes(todayEntry?.notes || "");
-  }, [todayEntry]);
+    setNotes(todayEntry?.notes || (queued ? queued.payload.notes || "" : ""));
+  }, [todayEntry, queued]);
 
   // "X de Y salas já lançaram hoje": só para quem acompanha mais de uma sala
   // (gestor/admin). Busca leve, reaproveitando stock.list sem roomId (o
@@ -164,16 +189,31 @@ export default function Stock({
 
     setSaving(true);
     setFormError("");
+    const payload = {
+      id: id ?? undefined,
+      version: version ?? undefined,
+      requestId,
+      roomId,
+      date: today(),
+      qty,
+      notes: notes.trim(),
+    };
+    // Sem internet: o lançamento NOVO do dia fica guardado no aparelho e é
+    // enviado sozinho depois. Ajustes (gestor/admin) exigem internet.
+    const keepOffline = () => {
+      if (!enqueueStock(user.uid, payload)) {
+        setFormError("Sem internet e não foi possível guardar neste aparelho. Tente de novo quando a conexão voltar.");
+        return;
+      }
+      setPending(null);
+      setSaved(false);
+    };
     try {
-      const result = await api.stockSave(idToken, {
-        id: id ?? undefined,
-        version: version ?? undefined,
-        requestId,
-        roomId,
-        date: today(),
-        qty,
-        notes: notes.trim(),
-      });
+      if (!id && typeof navigator !== "undefined" && navigator.onLine === false) {
+        keepOffline();
+        return;
+      }
+      const result = await api.stockSave(idToken, payload);
       setPending(null);
       setSaved(true);
       setEditingToday(false);
@@ -181,7 +221,17 @@ export default function Stock({
       setSummaryTick((t) => t + 1);
     } catch (err) {
       if (authGuard(err)) return;
-      setFormError(err instanceof ApiError ? err.message : "Não foi possível salvar o lançamento agora.");
+      if (!id && isConnectivityError(err)) {
+        keepOffline();
+        return;
+      }
+      setFormError(
+        isConnectivityError(err)
+          ? "Sem conexão com o servidor. Ajustes precisam de internet — tente de novo quando a conexão voltar."
+          : err instanceof ApiError
+          ? err.message
+          : "Não foi possível salvar o lançamento agora."
+      );
     } finally {
       setSaving(false);
     }
@@ -308,7 +358,7 @@ export default function Stock({
     );
   }
 
-  const lockedForOperador = !canAdjust && !!todayEntry && !editingToday;
+  const lockedForOperador = (!canAdjust && !!todayEntry && !editingToday) || (!todayEntry && !!queued);
 
   return (
     <>
@@ -364,6 +414,21 @@ export default function Stock({
                 <button className="link-button" onClick={loadToday}>
                   Tentar novamente
                 </button>
+              </p>
+            )}
+
+            {!todayEntry && queued && (
+              <p className={queued.status === "failed" ? "error-message" : "offline-note"} role="status">
+                <CloudOff size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                {queued.status === "failed"
+                  ? `O lançamento guardado neste aparelho não foi aceito pelo servidor: ${queued.error || "motivo não informado"}. Veja em "Ver" na faixa do topo.`
+                  : "Lançamento de hoje guardado neste aparelho. Ele será enviado sozinho quando a internet voltar."}
+              </p>
+            )}
+            {!todayEntry && !queued && offlineView && (
+              <p className="offline-note" role="status">
+                <CloudOff size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                Sem internet: não dá para conferir se alguém já lançou o estoque de hoje nesta sala. Você pode lançar mesmo assim — se já houver um lançamento, o servidor vai avisar ao receber.
               </p>
             )}
 

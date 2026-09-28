@@ -4,6 +4,7 @@
 export type AppConfig = { apiUrl: string };
 
 let cached: Promise<AppConfig> | null = null;
+const CONFIG_KEY = "gavkids.apiUrl.v1";
 
 function normalize(data: unknown): AppConfig {
   const apiUrl = data && typeof data === "object" && typeof (data as Record<string, unknown>).apiUrl === "string"
@@ -14,10 +15,27 @@ function normalize(data: unknown): AppConfig {
 
 export function loadConfig(): Promise<AppConfig> {
   if (!cached) {
+    // Sem internet (fetch falhou), usamos a última URL que funcionou neste aparelho.
     cached = fetch("./config.json", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : {}))
-      .catch(() => ({}))
-      .then(normalize);
+      .then(normalize)
+      .then((cfg) => {
+        try {
+          if (cfg.apiUrl) localStorage.setItem(CONFIG_KEY, cfg.apiUrl);
+        } catch {
+          // armazenamento indisponível
+        }
+        return cfg;
+      })
+      .catch(() => {
+        let apiUrl = "";
+        try {
+          apiUrl = localStorage.getItem(CONFIG_KEY) || "";
+        } catch {
+          // armazenamento indisponível
+        }
+        return { apiUrl };
+      });
   }
   return cached;
 }
