@@ -66,8 +66,10 @@ export interface ApiRecord {
   notes: string;
   returnedToDesk: boolean;
   createdBy: string;
+  createdByName?: string; // v5.4: nome de quem registrou (vem do servidor)
   createdAt: string;
   updatedBy: string;
+  updatedByName?: string;
   updatedAt: string;
 }
 
@@ -82,6 +84,8 @@ export interface ApiSupportGrant {
   revoked: boolean;
   revokedAt: string;
   revokedBy: string;
+  uidName?: string;
+  grantedByName?: string;
 }
 
 export interface MeResponse {
@@ -104,6 +108,8 @@ export interface ApiStockEntry {
   createdAt: string;
   updatedBy: string;
   updatedAt: string;
+  createdByName?: string;
+  updatedByName?: string;
 }
 
 export interface ListStockParams {
@@ -144,6 +150,7 @@ export interface ListRecordsParams {
   gender?: string;
   tea?: boolean;
   cursor?: number;
+  limit?: number; // v5.3: até 5000 por página (backends antigos ignoram e usam 200)
 }
 
 export interface ListRecordsResponse {
@@ -205,7 +212,50 @@ export class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 25000; // ScriptLock do backend usa 20s; margem para round-trip.
 
-async function call<T>(action: string, body: Record<string, unknown> = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+// Leituras (não mudam nada no servidor) podem ser repetidas com segurança:
+// se o Apps Script demorar ou a rede oscilar, tentamos de novo sozinhos
+// antes de mostrar erro. Gravações NÃO entram aqui: check-in/estoque caem na
+// fila offline (que já reenvia), e as ações de administração não repetem
+// para não correr risco de efeito em dobro.
+const READ_ACTIONS = new Set([
+  "me",
+  "records.list",
+  "records.history",
+  "records.ranking",
+  "admin.users",
+  "admin.rooms",
+  "stock.list",
+  "stock.history",
+  "support.list",
+  "support.rooms",
+]);
+const TRANSIENT = new Set(["TIMEOUT", "OFFLINE", "BUSY", "BAD_RESPONSE", "INTERNAL"]);
+const READ_TIMEOUT_MS = 45000;
+const RETRY_DELAYS_MS = [1500, 4000];
+
+async function call<T>(action: string, body: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+  if (!READ_ACTIONS.has(action)) return callOnce<T>(action, body, timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callOnce<T>(action, body, timeoutMs ?? READ_TIMEOUT_MS);
+    } catch (err) {
+      const canRetry =
+        err instanceof ApiError &&
+        TRANSIENT.has(err.code) &&
+        attempt < RETRY_DELAYS_MS.length &&
+        (typeof navigator === "undefined" || navigator.onLine !== false);
+      if (!canRetry) {
+        if (err instanceof ApiError && err.code === "TIMEOUT") {
+          throw new ApiError("TIMEOUT", "O servidor está demorando mais que o normal para responder (tentamos 3 vezes). Aguarde um instante e toque em Tentar novamente.");
+        }
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
+async function callOnce<T>(action: string, body: Record<string, unknown>, timeoutMs: number): Promise<T> {
   const { apiUrl } = await loadConfig();
   if (!apiUrl) {
     throw new ApiError(
@@ -288,7 +338,7 @@ export async function listAllRecords(idToken: string, params: Omit<ListRecordsPa
   let cursor: number | undefined = 0;
   let totalRecords = 0;
   for (;;) {
-    const page = await listRecords(idToken, { ...params, cursor });
+    const page = await listRecords(idToken, { ...params, cursor, limit: 2000 });
     all.push(...page.records);
     totalRecords = page.totalRecords;
     if (page.nextCursor == null) break;
@@ -298,6 +348,17 @@ export async function listAllRecords(idToken: string, params: Omit<ListRecordsPa
 }
 export function saveRecord(idToken: string, record: SaveRecordInput) {
   return call<ApiRecord>("records.save", { idToken, record });
+}
+// v5.3: ranking já somado no servidor (resposta pequena, uma chamada só).
+export interface RankingRow {
+  uid: string;
+  name?: string;
+  count: number;
+  tea: number;
+  returned: number;
+}
+export function recordsRanking(idToken: string, params: { from: string; to: string; roomId?: string }) {
+  return call<{ rows: RankingRow[]; total: number }>("records.ranking", { idToken, ...params });
 }
 export function recordHistory(idToken: string, recordId: string) {
   return call<ApiRecord[]>("records.history", { idToken, recordId });

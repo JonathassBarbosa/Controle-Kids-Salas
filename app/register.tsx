@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type Bathroom } from "./api";
-import { ages, bathroomOptions, careSummary, daysAgo, draftSignature, emptyDraft, formatDateBR, genders, minutesSince, roomName, shifts, suggestedShift, today, validateEntryDraft, type EntryDraft } from "./model";
+import { ages, bathroomOptions, careSummary, daysAgo, draftSignature, emptyDraft, formatDateBR, genders, minutesSince, personName, roomName, shifts, suggestedShift, today, validateEntryDraft, type EntryDraft } from "./model";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Choice } from "./choice";
 import { enqueueRecord, isConnectivityError, loadRosterCache, onOutboxChange, pendingRecordsFor, saveRosterCache } from "./offline";
@@ -115,7 +115,7 @@ export default function Register({
   const [outboxTick, setOutboxTick] = useState(0);
   useEffect(() => onOutboxChange(() => setOutboxTick((t) => t + 1)), []);
   const pendingHere = useMemo(
-    () => (draft.roomId && draft.date && draft.shift ? pendingRecordsFor(user.uid, draft.roomId, draft.date, draft.shift) : []),
+    () => (draft.roomId && draft.date && draft.shift ? pendingRecordsFor(user.uid, draft.roomId, draft.date, draft.shift, user.name) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [user.uid, draft.roomId, draft.date, draft.shift, outboxTick]
   );
@@ -256,7 +256,7 @@ export default function Register({
         setError("Sem internet e não foi possível guardar neste aparelho (armazenamento cheio ou bloqueado). Anote os dados e tente de novo.");
         return;
       }
-      const ghost = pendingRecordsFor(user.uid, payload.roomId, payload.date, payload.shift).find((r) => r.id === "pendente:" + requestId) || null;
+      const ghost = pendingRecordsFor(user.uid, payload.roomId, payload.date, payload.shift, user.name).find((r) => r.id === "pendente:" + requestId) || null;
       setPending(null);
       setSaved(ghost);
       setSavedOffline(true);
@@ -624,6 +624,7 @@ export default function Register({
                         <span>
                           {r.age} · {r.gender}
                         </span>
+                        <span className="roster-author">por {personName(r.createdBy, r.createdByName, undefined, user)}</span>
                         <span className="roster-tags">
                           {careSummary(r, false).map((f) => (
                             <em key={f}>{f}</em>
@@ -745,8 +746,8 @@ export default function Register({
                 )}
                 <div className="detail-grid-full detail-meta">
                   <span>
-                    Registrado {detail.createdBy === user.uid ? "por você" : "por outra pessoa da equipe"}
-                    {detail.version > 1 ? " · corrigido depois do registro original" : ""}.
+                    Registrado por {personName(detail.createdBy, detail.createdByName, undefined, user)}
+                    {detail.version > 1 ? ` · corrigido depois por ${personName(detail.updatedBy, detail.updatedByName, undefined, user)}` : ""}.
                   </span>
                 </div>
               </div>

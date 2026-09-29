@@ -1,11 +1,12 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiSupportGrant, type ApiUser, type Role } from "./api";
-import { ages, careSummary, daysAgo, formatDateBR, genders, roomName, shifts, today } from "./model";
+import { ages, careSummary, daysAgo, formatDateBR, genders, personName, roomName, shifts, today } from "./model";
 import { exportPng, exportXlsx } from "./exports";
 import { Choice } from "./choice";
+import { useDebounced } from "./use-debounced";
 import Stock from "./stock";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -16,9 +17,6 @@ const ROLE_LABELS: Record<Role, string> = { operador: "Operador(a)", gestor: "Ge
 // 16000px de altura. Resumimos em vez de estourar silenciosamente.
 const PNG_ROW_LIMIT = 250;
 
-function short(uid: string) {
-  return uid.slice(0, 8);
-}
 
 export default function Management({
   user,
@@ -71,28 +69,34 @@ export default function Management({
     [onAuthExpired]
   );
 
+  const qStart = useDebounced(start);
+  const qEnd = useDebounced(end);
+  const loadSeq = useRef(0);
   const loadRecords = useCallback(async () => {
-    if (isOperadorOnly || start > end) return;
+    if (isOperadorOnly || qStart > qEnd) return;
+    const seq = ++loadSeq.current;
     setLoading(true);
     setLoadError("");
     try {
       const { records: all } = await api.listAllRecords(idToken, {
-        from: start,
-        to: end,
+        from: qStart,
+        to: qEnd,
         roomId: roomFilter || undefined,
         shift: shift === "Todos" ? undefined : shift,
         age: age === "Todos" ? undefined : age,
         gender: gender === "Todos" ? undefined : gender,
         tea: teaFilter === "Todos" ? undefined : teaFilter === "Sim",
       });
+      if (seq !== loadSeq.current) return; // chegou uma busca mais nova
       setRecords(all);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       if (authGuard(err)) return;
       setLoadError(err instanceof ApiError ? err.message : "Não foi possível carregar os registros agora.");
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
-  }, [idToken, start, end, roomFilter, shift, age, gender, teaFilter, authGuard, isOperadorOnly]);
+  }, [idToken, qStart, qEnd, roomFilter, shift, age, gender, teaFilter, authGuard, isOperadorOnly]);
 
   useEffect(() => {
     loadRecords();
@@ -112,10 +116,8 @@ export default function Management({
       .catch(() => {});
   }, [isAdmin, isGestor, idToken]);
 
-  function authorLabel(uid: string) {
-    if (uid === user.uid) return "Você";
-    if (userNames[uid]) return userNames[uid];
-    return "Colaborador " + short(uid);
+  function authorLabel(uid: string, serverName?: string) {
+    return personName(uid, serverName, userNames, user);
   }
 
   // Sala/turno/idade/gênero/TEA já são filtrados pelo servidor (records.list);
@@ -177,7 +179,7 @@ export default function Management({
             <TableCell>{r.age}</TableCell>
             <TableCell>{r.gender}</TableCell>
             <TableCell>{careSummary(r, false).join(", ") || "—"}</TableCell>
-            <TableCell>{authorLabel(r.updatedBy)}</TableCell>
+            <TableCell>{authorLabel(r.createdBy, r.createdByName)}</TableCell>
             <TableCell>
               <button className="link-button" disabled={!canCorrect(r)} onClick={() => onEdit(r)}>
                 Corrigir
@@ -344,7 +346,7 @@ export default function Management({
           {audit?.history &&
             audit.history.map((h) => (
               <p key={h.version}>
-                {h.version === 1 ? "Criado" : `Corrigido (versão ${h.version})`} em {new Date(h.updatedAt).toLocaleString("pt-BR")} por {authorLabel(h.updatedBy)}.
+                {h.version === 1 ? "Criado" : `Corrigido (versão ${h.version})`} em {new Date(h.updatedAt).toLocaleString("pt-BR")} por {authorLabel(h.updatedBy, h.updatedByName)}.
                 <br />
                 {h.childName} · {h.age} · {h.gender}
                 {careSummary(h).length ? " — " + careSummary(h).join("; ") : ""}
@@ -374,9 +376,12 @@ function RankingPanel({
 }) {
   const [start, setStart] = useState(daysAgo(30));
   const [end, setEnd] = useState(today());
-  const [records, setRecords] = useState<ApiRecord[] | null>(null);
+  const [rows, setRows] = useState<{ uid: string; name?: string; count: number }[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const qStart = useDebounced(start);
+  const qEnd = useDebounced(end);
+  const loadSeq = useRef(0);
 
   const authGuard = useCallback(
     (err: unknown) => {
@@ -390,35 +395,47 @@ function RankingPanel({
   );
 
   const load = useCallback(async () => {
-    if (start > end) return;
+    if (qStart > qEnd) return;
+    const seq = ++loadSeq.current;
     setLoading(true);
     setLoadError("");
     try {
-      const { records: all } = await api.listAllRecords(idToken, { from: start, to: end });
-      setRecords(all);
+      let result: { uid: string; name?: string; count: number }[];
+      try {
+        // v5.3: o servidor já devolve a contagem pronta (uma chamada leve).
+        result = (await api.recordsRanking(idToken, { from: qStart, to: qEnd })).rows;
+      } catch (err) {
+        // Apps Script ainda na versão anterior: conta aqui mesmo, como antes.
+        if (!(err instanceof ApiError && err.code === "NOT_FOUND")) throw err;
+        const { records: all } = await api.listAllRecords(idToken, { from: qStart, to: qEnd });
+        const counts = new Map<string, number>();
+        const names = new Map<string, string>();
+        all.forEach((r) => {
+          counts.set(r.createdBy, (counts.get(r.createdBy) || 0) + 1);
+          if (r.createdByName) names.set(r.createdBy, r.createdByName);
+        });
+        result = [...counts.entries()].map(([uid, count]) => ({ uid, name: names.get(uid), count }));
+      }
+      if (seq !== loadSeq.current) return;
+      setRows(result);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       if (authGuard(err)) return;
       setLoadError(err instanceof ApiError ? err.message : "Não foi possível carregar o ranking agora.");
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
-  }, [idToken, start, end, authGuard]);
+  }, [idToken, qStart, qEnd, authGuard]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  function nameFor(uid: string) {
-    if (uid === actor.uid) return "Você";
-    return userNames[uid] || "Colaborador " + short(uid);
+  function nameFor(uid: string, serverName?: string) {
+    return personName(uid, serverName, userNames, actor);
   }
 
-  const ranking = useMemo(() => {
-    if (!records) return [];
-    const counts = new Map<string, number>();
-    records.forEach((r) => counts.set(r.createdBy, (counts.get(r.createdBy) || 0) + 1));
-    return [...counts.entries()].map(([uid, count]) => ({ uid, count })).sort((a, b) => b.count - a.count);
-  }, [records]);
+  const ranking = useMemo(() => (rows ? [...rows].sort((a, b) => b.count - a.count) : []), [rows]);
 
   return (
     <>
@@ -458,7 +475,7 @@ function RankingPanel({
               {ranking.map((row, i) => (
                 <li key={row.uid} className={i === 0 ? "ranking-first" : ""}>
                   <span className="ranking-position">{i + 1}º</span>
-                  <strong>{nameFor(row.uid)}</strong>
+                  <strong>{nameFor(row.uid, row.name)}</strong>
                   <span className="ranking-count">
                     {row.count} atendimento{row.count === 1 ? "" : "s"}
                   </span>
@@ -576,7 +593,7 @@ function SupportPanel({
   }
 
   function nameFor(uid: string) {
-    return operators.find((o) => o.uid === uid)?.name || "Colaborador " + short(uid);
+    return personName(uid, grants?.find((g) => g.uid === uid)?.uidName || operators.find((o) => o.uid === uid)?.name, undefined, actor);
   }
 
   function status(g: ApiSupportGrant) {
@@ -999,8 +1016,8 @@ function SystemPanel() {
       <article>
         <h2>Limitações conhecidas desta versão</h2>
         <p>
-          O nome de quem registrou um atendimento só é exibido para o administrador (a API devolve apenas o identificador do usuário para gestor e operador). Sessões
-          expiradas não têm limpeza automática na planilha. A exportação PNG resume históricos muito grandes; use XLSX para o total completo.
+          O nome de quem registrou cada atendimento é enviado pelo próprio servidor (Apps Script v5.4 ou mais novo) e aparece em todas as telas. Sessões
+          expiradas antigas são removidas automaticamente da planilha. A exportação PNG resume históricos muito grandes; use XLSX para o total completo.
         </p>
       </article>
     </div>

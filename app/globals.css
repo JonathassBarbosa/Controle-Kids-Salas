@@ -220,3 +220,4 @@ fieldset.field legend{padding:0 4px;font-size:14px;font-weight:600}
 .failed-list li em{font-size:13px;color:#8a1f1f;font-style:normal}
 .failed-list li button{display:inline-flex;align-items:center;gap:5px;flex-shrink:0}
 @media (max-width:760px){.sync-bar{margin:10px 14px 0}.failed-list li{flex-direction:column}}
+.roster-author{font-size:12px;color:var(--muted)}

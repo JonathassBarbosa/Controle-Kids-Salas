@@ -3,11 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Candy, Check, CloudOff, Loader2, Pencil, RefreshCw } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRoom, type ApiStockEntry, type ApiUser } from "./api";
-import { STOCK_ITEMS, daysAgo, emptyStockQty, formatDateBR, roomName, stockQtyFromEntry, stockSignature, today, validateStockQty } from "./model";
+import { STOCK_ITEMS, daysAgo, emptyStockQty, formatDateBR, personName, roomName, stockQtyFromEntry, stockSignature, today, validateStockQty } from "./model";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Choice } from "./choice";
+import { useDebounced } from "./use-debounced";
 import { enqueueStock, isConnectivityError, onOutboxChange, pendingStockFor } from "./offline";
 
 // Grade dos 16 insumos fixos, usada tanto no lançamento diário quanto no
@@ -251,12 +252,15 @@ export default function Stock({
   const [adjustError, setAdjustError] = useState("");
   const [adjustPending, setAdjustPending] = useState<{ id: string; signature: string } | null>(null);
 
+  // Só busca quando a sub-aba está aberta, e depois que a data parou de mudar.
+  const qHistStart = useDebounced(histStart);
+  const qHistEnd = useDebounced(histEnd);
   const loadHistory = useCallback(async () => {
-    if (!canAdjust || histStart > histEnd) return;
+    if (!canAdjust || subTab !== "Ajustar" || qHistStart > qHistEnd) return;
     setHistLoading(true);
     setHistError("");
     try {
-      const { entries } = await api.stockList(idToken, { from: histStart, to: histEnd, roomId: histRoom || undefined });
+      const { entries } = await api.stockList(idToken, { from: qHistStart, to: qHistEnd, roomId: histRoom || undefined });
       setHistEntries(entries);
     } catch (err) {
       if (authGuard(err)) return;
@@ -264,7 +268,7 @@ export default function Stock({
     } finally {
       setHistLoading(false);
     }
-  }, [canAdjust, idToken, histStart, histEnd, histRoom, authGuard]);
+  }, [canAdjust, subTab, idToken, qHistStart, qHistEnd, histRoom, authGuard]);
 
   useEffect(() => {
     loadHistory();
@@ -325,12 +329,14 @@ export default function Stock({
   const [macroLoading, setMacroLoading] = useState(false);
   const [macroError, setMacroError] = useState("");
 
+  const qMacroStart = useDebounced(macroStart);
+  const qMacroEnd = useDebounced(macroEnd);
   const loadMacro = useCallback(async () => {
-    if (!isAdmin || macroStart > macroEnd) return;
+    if (!isAdmin || subTab !== "Consolidado" || qMacroStart > qMacroEnd) return;
     setMacroLoading(true);
     setMacroError("");
     try {
-      const { entries } = await api.stockList(idToken, { from: macroStart, to: macroEnd });
+      const { entries } = await api.stockList(idToken, { from: qMacroStart, to: qMacroEnd });
       setMacroEntries(entries);
     } catch (err) {
       if (authGuard(err)) return;
@@ -338,7 +344,7 @@ export default function Stock({
     } finally {
       setMacroLoading(false);
     }
-  }, [isAdmin, idToken, macroStart, macroEnd, authGuard]);
+  }, [isAdmin, subTab, idToken, qMacroStart, qMacroEnd, authGuard]);
 
   useEffect(() => {
     loadMacro();
@@ -434,7 +440,7 @@ export default function Stock({
 
             {todayEntry && !editingToday && (
               <p className="data-note">
-                Lançamento de hoje ({formatDateBR(today())}) já enviado por {todayEntry.createdBy === user.uid ? "você" : "uma recreadora desta sala"}.{" "}
+                Lançamento de hoje ({formatDateBR(today())}) já enviado por {personName(todayEntry.createdBy, todayEntry.createdByName, undefined, user)}.{" "}
                 {canAdjust
                   ? "Como você pode ajustar, os campos abaixo mostram os valores já enviados."
                   : "Só um(a) gestor(a) ou administrador(a) pode ajustar um lançamento já enviado."}
@@ -521,7 +527,7 @@ export default function Stock({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      {["Data", "Sala", "Versão", "Última atualização", ""].map((h) => (
+                      {["Data", "Sala", "Lançado por", "Versão", "Última atualização", ""].map((h) => (
                         <TableHead key={h}>{h}</TableHead>
                       ))}
                     </TableRow>
@@ -531,6 +537,10 @@ export default function Stock({
                       <TableRow key={e.id}>
                         <TableCell>{formatDateBR(e.date)}</TableCell>
                         <TableCell>{roomName(rooms, e.roomId)}</TableCell>
+                        <TableCell>
+                          {personName(e.createdBy, e.createdByName, undefined, user)}
+                          {e.version > 1 && <small style={{ display: "block", color: "var(--muted)" }}>ajuste: {personName(e.updatedBy, e.updatedByName, undefined, user)}</small>}
+                        </TableCell>
                         <TableCell>{e.version === 1 ? "Original" : `Ajustado (v${e.version})`}</TableCell>
                         <TableCell>{new Date(e.updatedAt).toLocaleString("pt-BR")}</TableCell>
                         <TableCell>

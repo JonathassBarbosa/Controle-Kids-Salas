@@ -85,7 +85,7 @@ export function isConnectivityError(err: unknown) {
 }
 
 // Registro "fantasma" para mostrar na lista da sala enquanto não sincroniza.
-export function pendingRecordsFor(uid: string, roomId: string, date: string, shift: string): (ApiRecord & { _pending: "pending" | "failed"; _error?: string })[] {
+export function pendingRecordsFor(uid: string, roomId: string, date: string, shift: string, name = ""): (ApiRecord & { _pending: "pending" | "failed"; _error?: string })[] {
   return outbox(uid)
     .filter((i): i is Extract<OutboxItem, { kind: "record" }> => i.kind === "record")
     .filter((i) => i.payload.roomId === roomId && i.payload.date === date && i.payload.shift === shift)
@@ -110,8 +110,10 @@ export function pendingRecordsFor(uid: string, roomId: string, date: string, shi
       notes: i.payload.notes || "",
       returnedToDesk: false,
       createdBy: uid,
+      createdByName: name,
       createdAt: i.createdAt,
       updatedBy: uid,
+      updatedByName: name,
       updatedAt: i.createdAt,
       _pending: i.status,
       _error: i.error,

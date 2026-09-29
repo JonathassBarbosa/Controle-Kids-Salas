@@ -1,4 +1,4 @@
-import type { ApiRecord, ApiRoom, Bathroom } from "./api";
+import type { ApiRecord, ApiRoom, ApiUser, Bathroom } from "./api";
 
 // Espelham as constantes do backend (GAV em apps-script/Code.gs). Mantidas aqui
 // só para montar o formulário antes de enviar; a validação que vale é a
@@ -206,4 +206,14 @@ function childFields(e: EntryDraft) {
 // id, version, roomId, date, shift, childName, childFields, notes]).
 export function draftSignature(e: EntryDraft) {
   return JSON.stringify([e.id || "", e.version || 0, e.roomId, e.date, e.shift, e.childName.trim(), childFields(e), e.notes.trim()]);
+}
+
+// Nome da recreadora/usuário para exibir em qualquer tela. Prioridade: o nome
+// que o servidor mandou junto (v5.4), depois a lista de usuários já carregada,
+// depois o próprio usuário logado. Só em último caso mostra um código curto.
+export function personName(uid: string, serverName?: string, known?: Record<string, string>, me?: ApiUser | null): string {
+  const isMe = !!me && !!uid && me.uid === uid;
+  const name = (serverName || "").trim() || (known && known[uid]) || (isMe ? me!.name : "");
+  if (name) return isMe ? `${name} (você)` : name;
+  return uid ? "Usuário " + uid.slice(0, 6) : "—";
 }
