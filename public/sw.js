@@ -1,10 +1,11 @@
-// GAV Kids — service worker (27/09/2026): deixa o app abrir sem internet.
+// Kids-In — service worker (27/09/2026): deixa o app abrir sem internet.
 // - Página (index.html) e config.json: rede primeiro; sem rede, a última cópia guardada.
 // - Arquivos do app (assets/, imagens): cache primeiro (os nomes mudam a cada versão).
 // - Chamadas à API (Apps Script, outro domínio) NUNCA passam por aqui: os dados
 //   offline ficam na fila do próprio app (app/offline.ts), não no cache.
-const CACHE = "gavkids-v1";
-const SHELL = ["./", "./index.html", "./config.json", "./gav-logo-blue.png", "./gav-logo-cream.png", "./favicon.svg"];
+const CACHE = "kidsin-v2";
+const SHELL = ["./", "./index.html", "./config.json", "./manifest.webmanifest", "./favicon.svg", "./icons/icon.svg", "./icons/icon-192.png", "./kids/logo-mark.svg",
+  ...["mel", "lumi", "nuvem"].flatMap((k) => ["idle", "wave", "curious", "sleep"].map((p) => `./kids/${k}-${p}.webp`))];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -28,7 +29,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k.startsWith("gavkids-") && k !== CACHE).map((k) => caches.delete(k)));
+      await Promise.all(keys.filter((k) => (k.startsWith("gavkids-") || k.startsWith("kidsin-")) && k !== CACHE).map((k) => caches.delete(k)));
       await self.clients.claim();
     })()
   );

@@ -1,17 +1,18 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-export const viewport: Viewport = {width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#0b306b"};
+export const viewport: Viewport = {width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#FF9CC8"};
 
 export const metadata: Metadata = {
-  title: "GAV Kids | Registro de atendimento",
-  description: "Registro de atendimentos dos espaços kids GAV.",
+  title: "Kids-In",
+  description: "Check-in, estoque e salas das recreadoras.",
   other: {
     "codex-preview": "development",
   },
+  manifest: "/manifest.webmanifest",
   icons: {
-    icon: "/gav-logo-blue.png",
-    shortcut: "/gav-logo-blue.png",
+    icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }, { url: "/icons/favicon-32.png", sizes: "32x32" }],
+    apple: "/icons/apple-touch-icon.png",
   },
 };
 
