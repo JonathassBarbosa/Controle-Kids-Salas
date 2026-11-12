@@ -3,13 +3,14 @@ import { useEffect, useState } from "react";
 import { Eye, EyeOff, KeyRound, Loader2, LogIn, Mail } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type LoginResponse } from "./api";
+import { Buddy, Lockup, type BuddyKind } from "./kids";
 
 function errorMessage(err: unknown, fallback: string) {
   if (err instanceof ApiError) return err.message;
   return fallback;
 }
 
-export default function Login({ onLoggedIn, initialNotice }: { onLoggedIn: (res: LoginResponse) => void; initialNotice?: string }) {
+export default function Login({ onLoggedIn, initialNotice, buddy = "mel" }: { onLoggedIn: (res: LoginResponse) => void; initialNotice?: string; buddy?: BuddyKind }) {
   const [screen, setScreen] = useState<"login" | "recover" | "reset">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -104,16 +105,18 @@ export default function Login({ onLoggedIn, initialNotice }: { onLoggedIn: (res:
 
   return (
     <div className="auth-shell">
+      <div className="auth-art" aria-hidden="true">
+        <Buddy kind={buddy} pose={screen === "login" ? "wave" : "curious"} />
+      </div>
       <div className="auth-card">
         <div className="auth-brand">
-          <img src="./gav-logo-blue.png" alt="GAV Hotéis e Resorts" />
-          <span>Kids</span>
+          <Lockup />
         </div>
 
         {screen === "login" && (
           <>
             <p className="eyebrow">ENTRAR</p>
-            <h1>Bem-vinda de volta</h1>
+            <h1>Oi, que bom te ver!</h1>
             <p className="auth-sub">Use o usuário e a senha cadastrados pelo administrador.</p>
             {notice && <p className="auth-notice">{notice}</p>}
             {error && (

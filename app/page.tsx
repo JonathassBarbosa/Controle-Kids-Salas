@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { BarChart3, Candy, ClipboardList, History, Loader2, LogOut, RefreshCw, Sparkles } from "lucide-react";
+import { Candy, History, House, LogOut, Plus, RefreshCw, Sparkles, UserRound } from "lucide-react";
+import { Buddy, BuddyAvatar, BuddyPicker, BUDDIES, Lockup, Splash, useBuddy } from "./kids";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type LoginResponse } from "./api";
 import { loadConfig } from "./config";
@@ -15,17 +16,17 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 
 type Boot = { status: "loading" } | { status: "config-missing" } | { status: "offline"; message: string } | { status: "anon"; notice?: string } | { status: "ready"; idToken: string; user: ApiUser; rooms: ApiRoom[] };
 
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/);
-  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "?";
-}
-
 export default function App() {
   const [boot, setBoot] = useState<Boot>({ status: "loading" });
   const [view, setView] = useState<"register" | "manage">("register");
   const [editTarget, setEditTarget] = useState<ApiRecord | null>(null);
   const [help, setHelp] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  // Abertura animada: aparece uma vez a cada abertura do app (toque para pular).
+  const [intro, setIntro] = useState(true);
+  const endIntro = useCallback(() => setIntro(false), []);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [buddy, chooseBuddy] = useBuddy(boot.status === "ready" ? boot.user.uid : undefined);
 
   const bootstrap = useCallback(async () => {
     setBoot({ status: "loading" });
@@ -121,18 +122,24 @@ export default function App() {
       });
   }, [readyToken, onAuthExpired]);
 
+  const splash = intro ? <Splash kind={buddy} onDone={endIntro} /> : null;
+
   if (boot.status === "loading") {
     return (
-      <div className="boot-screen">
-        <Loader2 size={28} className="spin" />
-        <p>Carregando GAV Kids…</p>
-      </div>
+      <>
+        {splash}
+        <div className="boot-screen">
+          <Buddy kind={buddy} pose="curious" className="boot-buddy" />
+          <p>Abrindo a casinha…</p>
+        </div>
+      </>
     );
   }
 
   if (boot.status === "config-missing") {
     return (
       <div className="boot-screen">
+        <Buddy kind={buddy} pose="curious" className="boot-buddy" />
         <p className="error-message" role="alert">
           Este site ainda não foi conectado ao backend. Um administrador precisa editar o arquivo <code>config.json</code>, publicado junto com este site, e preencher{" "}
           <code>apiUrl</code> com a URL /exec do Apps Script implantado.
@@ -144,6 +151,7 @@ export default function App() {
   if (boot.status === "offline") {
     return (
       <div className="boot-screen">
+        <Buddy kind={buddy} pose="sleep" className="boot-buddy" />
         <p className="error-message" role="alert">
           {boot.message}
         </p>
@@ -155,7 +163,12 @@ export default function App() {
   }
 
   if (boot.status === "anon") {
-    return <Login onLoggedIn={onLoggedIn} initialNotice={boot.notice} />;
+    return (
+      <>
+        {splash}
+        <Login onLoggedIn={onLoggedIn} initialNotice={boot.notice} buddy={buddy} />
+      </>
+    );
   }
 
   const { idToken, user, rooms } = boot;
@@ -163,35 +176,50 @@ export default function App() {
   // histórico ou gestão de usuários/salas. Gestor(a) e admin continuam com o
   // menu completo ("Histórico e gestão", com abas por papel dentro dele).
   const isOperador = user.role === "operador";
-  const secondNavLabel = isOperador ? "Estoque" : "Histórico e gestão";
+  const secondNavLabel = isOperador ? "Estoque" : "Gestão";
   const SecondNavIcon = isOperador ? Candy : History;
+  const roleLabel = { operador: "Recreadora", gestor: "Gestor(a) de sala", admin: "Administrador(a)" }[user.role];
+  const goHome = () => {
+    setEditTarget(null);
+    setView("register");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   return (
     <main className="app-shell">
+      {splash}
       <aside className="sidebar">
         <div className="brand-lockup">
-          <img src="./gav-logo-cream.png" alt="GAV Hotéis e Resorts" />
-          <span>Kids</span>
+          <Lockup />
         </div>
         <nav aria-label="Navegação principal">
-          <a className={view === "register" ? "active" : ""} onClick={() => { setEditTarget(null); setView("register"); }}>
-            <ClipboardList size={20} />
+          <a className={view === "register" ? "active" : ""} onClick={goHome}>
+            <House size={20} />
             Início
           </a>
           <a className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>
             <SecondNavIcon size={20} />
-            {secondNavLabel}
+            {isOperador ? "Estoque" : "Histórico e gestão"}
+          </a>
+          <a onClick={() => setProfileOpen(true)}>
+            <UserRound size={20} />
+            Meu parceiro
           </a>
           <a onClick={() => setHelp(true)}>
             <Sparkles size={20} />
             Ajuda rápida
           </a>
         </nav>
+        <div className="sidebar-buddy" aria-hidden="true">
+          <Buddy kind={buddy} pose="idle" />
+        </div>
         <div className="sidebar-profile">
-          <div className="avatar">{initials(user.name)}</div>
+          <button className="avatar-button" onClick={() => setProfileOpen(true)} aria-label="Meu perfil">
+            <BuddyAvatar kind={buddy} size={40} />
+          </button>
           <div>
             <strong>{user.name}</strong>
-            <span>{{ operador: "Operador(a)", gestor: "Gestor(a) de sala", admin: "Administrador(a)" }[user.role]}</span>
+            <span>{roleLabel}</span>
           </div>
           <button aria-label="Sair" onClick={doLogout}>
             <LogOut size={18} />
@@ -202,19 +230,18 @@ export default function App() {
       <section className="workspace" id="registro">
         <header className="topbar">
           <div className="mobile-brand">
-            <img src="./gav-logo-blue.png" alt="GAV" />
-            <span>Kids</span>
+            <Lockup />
           </div>
           <div className="room-label">
             <span>Perfil</span>
-            <strong>{{ operador: "Operador(a)", gestor: "Gestor(a) de sala", admin: "Administrador(a)" }[user.role]}</strong>
+            <strong>{roleLabel}</strong>
           </div>
-          <button className="profile-button" onClick={doLogout}>
-            <span>{initials(user.name)}</span>
+          <button className="profile-button" onClick={() => setProfileOpen(true)} aria-label="Meu perfil">
+            <BuddyAvatar kind={buddy} size={40} />
             <span className="profile-copy">
               {user.name.split(" ")[0]}
               <br />
-              <small>Sair</small>
+              <small>Meu perfil</small>
             </span>
           </button>
         </header>
@@ -227,6 +254,7 @@ export default function App() {
             idToken={idToken}
             rooms={rooms}
             editTarget={editTarget}
+            buddy={buddy}
             onSaved={() => setEditTarget(null)}
             onCancelEdit={() => setEditTarget(null)}
             onAuthExpired={() => onAuthExpired("Sua sessão expirou. Entre novamente.")}
@@ -236,6 +264,7 @@ export default function App() {
             user={user}
             idToken={idToken}
             rooms={rooms}
+            buddy={buddy}
             onRoomsChanged={refreshRooms}
             onEdit={(record) => {
               setEditTarget(record);
@@ -245,28 +274,57 @@ export default function App() {
           />
         )}
 
-        <nav className="mobile-nav">
-          <a className={view === "register" ? "active" : ""} onClick={() => { setEditTarget(null); setView("register"); }}>
-            <ClipboardList size={20} />
+        <nav className="mobile-nav" aria-label="Abas do app">
+          <a className={view === "register" ? "active" : ""} onClick={goHome}>
+            <House size={22} />
             <span>Início</span>
           </a>
           <a className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>
-            <SecondNavIcon size={20} />
+            <SecondNavIcon size={22} />
             <span>{secondNavLabel}</span>
           </a>
-          {!isOperador && (
-            <a onClick={() => setView("manage")}>
-              <BarChart3 size={20} />
-              <span>Resumo</span>
-            </a>
-          )}
+          <a className="nav-plus" onClick={goHome} aria-label="Novo check-in">
+            <span>
+              <Plus size={26} strokeWidth={2.8} />
+            </span>
+          </a>
+          <a onClick={() => setHelp(true)}>
+            <Sparkles size={22} />
+            <span>Ajuda</span>
+          </a>
+          <a onClick={() => setProfileOpen(true)}>
+            <UserRound size={22} />
+            <span>Perfil</span>
+          </a>
         </nav>
       </section>
+
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+        <DialogContent className="profile-dialog">
+          <div className="profile-top">
+            <BuddyAvatar kind={buddy} size={88} />
+            <DialogTitle>{user.name}</DialogTitle>
+            <DialogDescription>
+              {roleLabel}
+              {user.role !== "admin" && rooms.length ? ` · ${rooms.filter((r) => user.roomIds.includes(r.id)).map((r) => r.name).join(", ")}` : ""}
+            </DialogDescription>
+          </div>
+          <p className="lbl">Meu parceiro de turno</p>
+          <BuddyPicker kind={buddy} onChoose={chooseBuddy} />
+          <p className="data-note" style={{ margin: 0 }}>
+            {BUDDIES[buddy].name} aparece na abertura, no início e comemora cada check-in com você. A escolha fica guardada neste aparelho.
+          </p>
+          <button className="secondary logout-button" type="button" onClick={doLogout}>
+            <LogOut size={18} />
+            Sair da conta
+          </button>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={help} onOpenChange={setHelp}>
         <DialogContent>
           <DialogTitle>Registro rápido</DialogTitle>
-          <DialogDescription>Como usar o GAV Kids</DialogDescription>
+          <DialogDescription>Como usar o Kids-In</DialogDescription>
           <p>Registre cada criança assim que ela chegar: nome, faixa etária, gênero e as informações de cuidado (TEA, deficiência, lanche, banheiro, restrição alimentar) antes de confirmar.</p>
           <p>
             {user.role === "admin"

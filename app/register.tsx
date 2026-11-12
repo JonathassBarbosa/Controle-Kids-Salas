@@ -24,6 +24,7 @@ import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type Bathroom } f
 import { ages, bathroomOptions, careSummary, daysAgo, draftSignature, emptyDraft, formatDateBR, genders, minutesSince, personName, roomName, shifts, suggestedShift, today, validateEntryDraft, type EntryDraft } from "./model";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Choice } from "./choice";
+import { Buddy, Confetti, type BuddyKind } from "./kids";
 import { enqueueRecord, isConnectivityError, loadRosterCache, onOutboxChange, pendingRecordsFor, saveRosterCache } from "./offline";
 
 function YesNo({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
@@ -67,6 +68,7 @@ export default function Register({
   idToken,
   rooms,
   editTarget,
+  buddy,
   onSaved,
   onCancelEdit,
   onAuthExpired,
@@ -75,6 +77,7 @@ export default function Register({
   idToken: string;
   rooms: ApiRoom[];
   editTarget: ApiRecord | null;
+  buddy: BuddyKind;
   onSaved: (rec: ApiRecord) => void;
   onCancelEdit: () => void;
   onAuthExpired: () => void;
@@ -93,6 +96,8 @@ export default function Register({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<{ id: string; signature: string } | null>(null);
+  // Comemoração do parceiro (pulinho + confete) a cada check-in salvo.
+  const [cheer, setCheer] = useState(0);
 
   // Atalho de autocorreção: quem criou o registro pode corrigi-lo direto pela
   // lista da própria sala, sem precisar de "Histórico e gestão" (que a
@@ -260,6 +265,7 @@ export default function Register({
       setPending(null);
       setSaved(ghost);
       setSavedOffline(true);
+      setCheer((c) => c + 1);
     };
     try {
       if (isNew && typeof navigator !== "undefined" && navigator.onLine === false) {
@@ -270,6 +276,7 @@ export default function Register({
       setPending(null);
       setSaved(result);
       setSavedOffline(false);
+      setCheer((c) => c + 1);
       setRosterTick((t) => t + 1);
       onSaved(result);
     } catch (err) {
@@ -351,10 +358,26 @@ export default function Register({
     <>
       <div className="content">
         <div className="welcome-row">
-          <div>
-            <p className="eyebrow">{effectiveEditTarget ? "CORREÇÃO DE REGISTRO" : "CHECK-IN DA CRIANÇA"}</p>
-            <h1>Olá, {user.name.split(" ")[0]}!</h1>
-            <p>{effectiveEditTarget ? "Ajuste os dados e confirme a correção." : "Registre a criança assim que ela chegar."}</p>
+          <div className="hello-card">
+            <div className="hello-copy">
+              <p className="eyebrow">{effectiveEditTarget ? "CORREÇÃO DE REGISTRO" : selectedRoomName ? `SALA ${selectedRoomName.toUpperCase()}` : "CHECK-IN DA CRIANÇA"}</p>
+              <h1>Olá, {user.name.split(" ")[0]}!</h1>
+              <p>{effectiveEditTarget ? "Ajuste os dados e confirme a correção." : "Registre a criança assim que ela chegar."}</p>
+              {!effectiveEditTarget && (
+                <div className="hello-count">
+                  <strong>{rosterRows == null ? "–" : rosterRows.length}</strong>
+                  <span>
+                    {rosterRows != null && rosterRows.length === 1 ? "criança" : "crianças"} neste turno
+                    <br />
+                    {draft.shift}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="hello-buddy">
+              <span className="bubble">{saved ? "Mais uma!" : !rosterRows || rosterRows.length === 0 ? "Bora começar!" : `Já são ${rosterRows.length}!`}</span>
+              <Buddy kind={buddy} pose={saved ? "wave" : "idle"} jump={cheer} />
+            </div>
           </div>
           <div className="today-card">
             <CalendarDays size={21} />
@@ -393,8 +416,10 @@ export default function Register({
         <section className="form-card">
           {saved ? (
             <div className="success-state">
-              <div className={stillQueued ? "success-icon offline" : "success-icon"}>
-                {stillQueued ? <CloudOff size={34} /> : <Check size={36} />}
+              <div className="success-buddy">
+                <Confetti fire={cheer} />
+                <Buddy kind={buddy} pose={stillQueued ? "curious" : "wave"} jump={cheer} />
+                <span className={stillQueued ? "success-icon offline" : "success-icon"}>{stillQueued ? <CloudOff size={20} /> : <Check size={22} />}</span>
               </div>
               <p className="eyebrow">{stillQueued ? "GUARDADO NESTE APARELHO" : savedOffline ? "ENVIADO AO SERVIDOR" : "REGISTRO CONFIRMADO PELO SERVIDOR"}</p>
               <h2>{stillQueued ? "Check-in guardado!" : effectiveEditTarget ? "Correção salva!" : "Check-in registrado!"}</h2>
@@ -426,8 +451,9 @@ export default function Register({
             </div>
           ) : step === 1 ? (
             <div className="step-content">
-              <div className="illustration-dot">
-                <Baby size={33} />
+              <div className="step-buddy">
+                <Buddy kind={buddy} pose="curious" />
+                <span className="bubble">Quem chegou?</span>
               </div>
               <p className="eyebrow">QUEM CHEGOU</p>
               <h2>Dados da criança</h2>

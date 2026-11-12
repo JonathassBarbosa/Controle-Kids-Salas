@@ -68,7 +68,7 @@ const BATHROOM_LABEL: Record<string, string> = { pode_levar: "Pode levar", chama
 // turno para repetir/somar; cada linha já é um atendimento único.
 export function exportXlsx(entries: ApiRecord[], rooms: ApiRoom[], filters: string) {
   const rows: (string | number)[][] = [
-    ["GAV Kids — Relatório de atendimentos (check-in por criança)"],
+    ["Kids-In — Relatório de atendimentos (check-in por criança)"],
     [filters],
     ["Cada linha é um check-in de uma criança. Não há registro de saída nem cálculo de lotação simultânea."],
     [
@@ -158,7 +158,7 @@ export function exportPng(entries: ApiRecord[], rooms: ApiRoom[], filters: strin
   c.fillRect(0, 0, 1700, 110);
   c.fillStyle = "#fef9e0";
   c.font = "bold 34px Georgia";
-  c.fillText("GAV Kids · Relatório de atendimentos", 45, 67);
+  c.fillText("Kids-In · Relatório de atendimentos", 45, 67);
   c.fillStyle = "#0b306b";
   c.font = "22px Arial";
   const lines = filters.match(/.{1,110}(?:\s|$)/g) || [filters];

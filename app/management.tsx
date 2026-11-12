@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, SlidersHorizontal } from "lucide-react";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiSupportGrant, type ApiUser, type Role } from "./api";
 import { ages, careSummary, daysAgo, formatDateBR, genders, personName, roomName, shifts, today } from "./model";
@@ -8,6 +8,8 @@ import { exportPng, exportXlsx } from "./exports";
 import { Choice } from "./choice";
 import { useDebounced } from "./use-debounced";
 import Stock from "./stock";
+import { Buddy, type BuddyKind } from "./kids";
+import { Avatar, RoomDetail, RoomOverview } from "./room-dashboard";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -22,6 +24,7 @@ export default function Management({
   user,
   idToken,
   rooms,
+  buddy,
   onRoomsChanged,
   onEdit,
   onAuthExpired,
@@ -29,6 +32,7 @@ export default function Management({
   user: ApiUser;
   idToken: string;
   rooms: ApiRoom[];
+  buddy: BuddyKind;
   onRoomsChanged: () => void;
   onEdit: (record: ApiRecord) => void;
   onAuthExpired: (message?: string) => void;
@@ -119,6 +123,12 @@ export default function Management({
   function authorLabel(uid: string, serverName?: string) {
     return personName(uid, serverName, userNames, user);
   }
+  const nameFor = useCallback((uid: string, serverName?: string) => personName(uid, serverName, userNames, user), [userNames, user]);
+  const periodDays = start === daysAgo(7) && end === today() ? 7 : start === daysAgo(14) && end === today() ? 14 : start === daysAgo(30) && end === today() ? 30 : 0;
+  function setPeriod(n: number) {
+    setStart(daysAgo(n));
+    setEnd(today());
+  }
 
   // Sala/turno/idade/gênero/TEA já são filtrados pelo servidor (records.list);
   // nome da criança e "voltou para a mesa" são filtrados aqui no cliente,
@@ -200,11 +210,11 @@ export default function Management({
     <section className={isOperadorOnly ? "management management-simple" : "management"}>
       <header className="management-heading">
         <div>
-          <p className="eyebrow">{isOperadorOnly ? "GAV KIDS · ESTOQUE" : "GAV KIDS · GESTÃO"}</p>
+          <p className="eyebrow">{isOperadorOnly ? "KIDS-IN · ESTOQUE" : "KIDS-IN · GESTÃO"}</p>
           <h1>{isOperadorOnly ? "Estoque da sua sala" : "Visão da operação"}</h1>
           <p>{isOperadorOnly ? "Registre a saída de hoje dos insumos da sua sala." : `Atendimentos dos espaços kids${!isAdmin ? " — salas vinculadas ao seu usuário" : ""}`}</p>
         </div>
-        <img src="./gav-logo-blue.png" alt="GAV" />
+        <Buddy kind={buddy} pose={isOperadorOnly ? "idle" : "curious"} className="heading-buddy" />
       </header>
 
       {tabs.length > 1 && (
@@ -221,6 +231,27 @@ export default function Management({
 
       {tab === "Dashboard" && (
         <>
+          <div className="dash-controls">
+            <div className="room-chips" role="group" aria-label="Sala">
+              {[{ id: "", name: isAdmin ? "Todas as salas" : "Minhas salas" }, ...myRooms.filter((r) => r.active)].map((r) => (
+                <button key={r.id || "all"} type="button" aria-pressed={roomFilter === r.id} onClick={() => setRoomFilter(r.id)}>
+                  {r.name}
+                </button>
+              ))}
+            </div>
+            <div className="seg" role="group" aria-label="Período">
+              {[7, 14, 30].map((n) => (
+                <button key={n} type="button" aria-pressed={periodDays === n} onClick={() => setPeriod(n)}>
+                  {n} dias
+                </button>
+              ))}
+            </div>
+          </div>
+          <details className="more-filters">
+            <summary>
+              <SlidersHorizontal size={16} />
+              Mais filtros e datas
+            </summary>
           <div className="filters">
             <label className="field">
               De
@@ -247,6 +278,7 @@ export default function Management({
             </label>
             <Choice label="Voltou para a mesa" value={returnedFilter} onChange={setReturnedFilter} options={["Todos", "Sim", "Não"]} />
           </div>
+          </details>
 
           {loading && (
             <p className="data-note">
@@ -281,6 +313,11 @@ export default function Management({
                   </article>
                 ))}
               </div>
+              {roomFilter ? (
+                <RoomDetail records={filtered} from={start} to={end} nameFor={nameFor} />
+              ) : (
+                <RoomOverview rooms={myRooms} records={filtered} from={start} to={end} nameFor={nameFor} onOpen={setRoomFilter} />
+              )}
               <p className="data-note">
                 Cada registro é o check-in de uma criança, feito pela recreadora em tempo real assim que ela chega. Sala, turno, faixa etária, gênero e TEA já
                 aplicados pelos filtros acima. Os números não representam lotação simultânea — não há registro de saída.
@@ -327,7 +364,7 @@ export default function Management({
 
       {tab === "Estoque" && <Stock user={user} idToken={idToken} rooms={rooms} onAuthExpired={onAuthExpired} />}
       {tab === "Usuários" && (isAdmin || isGestor) && <UsersPanel idToken={idToken} rooms={rooms} actor={user} onAuthExpired={onAuthExpired} />}
-      {tab === "Ranking" && (isAdmin || isGestor) && <RankingPanel idToken={idToken} actor={user} userNames={userNames} onAuthExpired={onAuthExpired} />}
+      {tab === "Ranking" && (isAdmin || isGestor) && <RankingPanel idToken={idToken} actor={user} rooms={myRooms.filter((r) => r.active)} userNames={userNames} onAuthExpired={onAuthExpired} />}
       {tab === "Salas" && isAdmin && <RoomsPanel idToken={idToken} rooms={rooms} onChanged={onRoomsChanged} onAuthExpired={onAuthExpired} />}
       {tab === "Sistema" && isAdmin && <SystemPanel />}
 
@@ -366,16 +403,20 @@ export default function Management({
 function RankingPanel({
   idToken,
   actor,
+  rooms,
   userNames,
   onAuthExpired,
 }: {
   idToken: string;
   actor: ApiUser;
+  rooms: ApiRoom[];
   userNames: Record<string, string>;
   onAuthExpired: (message?: string) => void;
 }) {
   const [start, setStart] = useState(daysAgo(30));
   const [end, setEnd] = useState(today());
+  // Ranking por sala: com uma sala escolhida, conta só os check-ins dela.
+  const [roomId, setRoomId] = useState("");
   const [rows, setRows] = useState<{ uid: string; name?: string; count: number }[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -402,12 +443,14 @@ function RankingPanel({
     try {
       let result: { uid: string; name?: string; count: number }[];
       try {
+        // Com sala escolhida, conta aqui a partir dos registros daquela sala.
+        if (roomId) throw new ApiError("NOT_FOUND", "ranking por sala");
         // v5.3: o servidor já devolve a contagem pronta (uma chamada leve).
         result = (await api.recordsRanking(idToken, { from: qStart, to: qEnd })).rows;
       } catch (err) {
         // Apps Script ainda na versão anterior: conta aqui mesmo, como antes.
         if (!(err instanceof ApiError && err.code === "NOT_FOUND")) throw err;
-        const { records: all } = await api.listAllRecords(idToken, { from: qStart, to: qEnd });
+        const { records: all } = await api.listAllRecords(idToken, { from: qStart, to: qEnd, roomId: roomId || undefined });
         const counts = new Map<string, number>();
         const names = new Map<string, string>();
         all.forEach((r) => {
@@ -425,7 +468,7 @@ function RankingPanel({
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, [idToken, qStart, qEnd, authGuard]);
+  }, [idToken, qStart, qEnd, roomId, authGuard]);
 
   useEffect(() => {
     load();
@@ -440,6 +483,13 @@ function RankingPanel({
   return (
     <>
       <h2>Recreadora com mais atendimentos</h2>
+      <div className="room-chips" role="group" aria-label="Sala" style={{ marginTop: 16 }}>
+        {[{ id: "", name: "Todas as salas" }, ...rooms].map((r) => (
+          <button key={r.id || "all"} type="button" aria-pressed={roomId === r.id} onClick={() => setRoomId(r.id)}>
+            {r.name}
+          </button>
+        ))}
+      </div>
       <div className="filters">
         <label className="field">
           De
@@ -475,6 +525,7 @@ function RankingPanel({
               {ranking.map((row, i) => (
                 <li key={row.uid} className={i === 0 ? "ranking-first" : ""}>
                   <span className="ranking-position">{i + 1}º</span>
+                  <Avatar name={nameFor(row.uid, row.name)} i={i} />
                   <strong>{nameFor(row.uid, row.name)}</strong>
                   <span className="ranking-count">
                     {row.count} atendimento{row.count === 1 ? "" : "s"}

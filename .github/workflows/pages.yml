@@ -1,4 +1,4 @@
-name: Publicar GAV Kids no GitHub Pages
+name: Publicar Kids-In no GitHub Pages
 on:
   workflow_dispatch:
 permissions:
