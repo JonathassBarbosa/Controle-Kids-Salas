@@ -10,6 +10,7 @@ import { useDebounced } from "./use-debounced";
 import Stock from "./stock";
 import { Buddy, type BuddyKind } from "./kids";
 import { Avatar, RoomDetail, RoomOverview } from "./room-dashboard";
+import { FeedbackResults } from "./feedback";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -25,6 +26,7 @@ export default function Management({
   idToken,
   rooms,
   buddy,
+  initialTab,
   onRoomsChanged,
   onEdit,
   onAuthExpired,
@@ -33,6 +35,7 @@ export default function Management({
   idToken: string;
   rooms: ApiRoom[];
   buddy: BuddyKind;
+  initialTab?: string;
   onRoomsChanged: () => void;
   onEdit: (record: ApiRecord) => void;
   onAuthExpired: (message?: string) => void;
@@ -46,7 +49,7 @@ export default function Management({
   const myRooms = useMemo(() => rooms.filter((r) => isAdmin || user.roomIds.includes(r.id)), [rooms, user, isAdmin]);
   const editableWithoutLimit = isAdmin;
 
-  const [tab, setTab] = useState(() => (isOperadorOnly ? "Estoque" : "Dashboard"));
+  const [tab, setTab] = useState(() => (isOperadorOnly ? "Estoque" : initialTab && (initialTab !== "Avaliações" || isAdmin) ? initialTab : "Dashboard"));
   const [start, setStart] = useState(daysAgo(30));
   const [end, setEnd] = useState(today());
   const [roomFilter, setRoomFilter] = useState("");
@@ -204,7 +207,7 @@ export default function Management({
     </Table>
   );
 
-  const tabs = isOperadorOnly ? ["Estoque"] : ["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários", "Ranking"] : []), ...(isAdmin ? ["Salas", "Sistema"] : [])];
+  const tabs = isOperadorOnly ? ["Estoque"] : ["Dashboard", "Estoque", ...(isAdmin || isGestor ? ["Usuários", "Ranking"] : []), ...(isAdmin ? ["Avaliações", "Salas", "Sistema"] : [])];
 
   return (
     <section className={isOperadorOnly ? "management management-simple" : "management"}>
@@ -365,6 +368,7 @@ export default function Management({
       {tab === "Estoque" && <Stock user={user} idToken={idToken} rooms={rooms} onAuthExpired={onAuthExpired} />}
       {tab === "Usuários" && (isAdmin || isGestor) && <UsersPanel idToken={idToken} rooms={rooms} actor={user} onAuthExpired={onAuthExpired} />}
       {tab === "Ranking" && (isAdmin || isGestor) && <RankingPanel idToken={idToken} actor={user} rooms={myRooms.filter((r) => r.active)} userNames={userNames} onAuthExpired={onAuthExpired} />}
+      {tab === "Avaliações" && isAdmin && <FeedbackResults idToken={idToken} rooms={rooms} user={user} onAuthExpired={() => onAuthExpired("Sua sessão expirou. Entre novamente.")} />}
       {tab === "Salas" && isAdmin && <RoomsPanel idToken={idToken} rooms={rooms} onChanged={onRoomsChanged} onAuthExpired={onAuthExpired} />}
       {tab === "Sistema" && isAdmin && <SystemPanel />}
 

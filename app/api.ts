@@ -228,6 +228,8 @@ const READ_ACTIONS = new Set([
   "stock.history",
   "support.list",
   "support.rooms",
+  "feedback.status",
+  "feedback.list",
 ]);
 const TRANSIENT = new Set(["TIMEOUT", "OFFLINE", "BUSY", "BAD_RESPONSE", "INTERNAL"]);
 const READ_TIMEOUT_MS = 45000;
@@ -428,4 +430,44 @@ export async function ping(): Promise<{ version: string } | null> {
 export function newRequestId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
   return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+
+// v5.5: avaliação anônima das recreadoras. Nada do usuário é enviado junto
+// com as respostas além da sessão (exigida para chamar a API); o servidor não
+// grava quem respondeu.
+export const FEEDBACK_AREAS = ["Login e abertura", "Check-in", "Cuidados da criança", "Lista do turno", "Estoque", "Modo sem internet", "Parceiros de turno", "Painel e relatórios"];
+export interface FeedbackStatus {
+  open: boolean;
+  cycle: string;
+  openedAt: string;
+  closedAt: string;
+}
+export interface FeedbackInput {
+  requestId: string;
+  roomId: string;
+  shift: string;
+  rating: number;
+  goodAreas: string[];
+  badAreas: string[];
+  working: string;
+  improve: string;
+  notWorking: string;
+  missing: string;
+}
+export interface FeedbackResponse extends Omit<FeedbackInput, "requestId"> {
+  id: string;
+  cycle: string;
+  date: string;
+}
+export function feedbackStatus(idToken: string) {
+  return call<FeedbackStatus>("feedback.status", { idToken });
+}
+export function feedbackSubmit(idToken: string, feedback: FeedbackInput) {
+  return call<{ ok: true }>("feedback.submit", { idToken, feedback });
+}
+export function feedbackSet(idToken: string, open: boolean, cycle?: string) {
+  return call<FeedbackStatus>("admin.feedback.set", { idToken, open, cycle });
+}
+export function feedbackList(idToken: string, cycle?: string) {
+  return call<{ status: FeedbackStatus; cycles: string[]; responses: FeedbackResponse[] }>("feedback.list", { idToken, cycle });
 }
