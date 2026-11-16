@@ -32,3 +32,9 @@ Viewport adaptável, sem bloquear zoom, inputs de pelo menos 16px (evita zoom au
 3. Depois disso, testar com usuários reais (um de cada papel) direto no GitHub Pages publicado, inclusive em celular.
 
 Não há credenciais Google, senhas nem tokens no repositório ou no JavaScript entregue ao navegador.
+
+## Avaliação das recreadoras (precisa do Apps Script v5.5)
+
+O app tem um formulário de avaliação e melhorias, **anônimo**: a recreadora escolhe só a sala de vendas e o turno, dá uma nota de 1 a 5 e conta o que funciona, o que pode melhorar, o que não funciona e o que falta. O administrador abre e encerra cada período de coleta pelo **Perfil** e vê as respostas em **Histórico e gestão › Avaliações** (com exportação em CSV).
+
+Para funcionar, o Apps Script precisa da versão 5.5 (`Code-v5.5.gs`, ao lado do `Code.gs` do projeto do servidor): substitua o Code.gs inteiro e implante uma **nova versão**. Não é preciso rodar `configurarGavKids` de novo: a aba `GAV_Avaliacoes` é criada sozinha. Enquanto o servidor estiver na 5.4, o convite não aparece para as recreadoras e o administrador vê um aviso pedindo a atualização.

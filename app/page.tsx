@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Candy, History, House, LogOut, Plus, RefreshCw, Sparkles, UserRound } from "lucide-react";
+import { Candy, History, House, LogOut, MessageCircleHeart, Plus, RefreshCw, Sparkles, UserRound } from "lucide-react";
 import { Buddy, BuddyAvatar, BuddyPicker, BUDDIES, Lockup, Splash, useBuddy } from "./kids";
+import { FeedbackBanner, FeedbackControl, FeedbackForm, feedbackDone, useFeedbackStatus } from "./feedback";
 import * as api from "./api";
 import { ApiError, type ApiRecord, type ApiRoom, type ApiUser, type LoginResponse } from "./api";
 import { loadConfig } from "./config";
@@ -18,7 +19,9 @@ type Boot = { status: "loading" } | { status: "config-missing" } | { status: "of
 
 export default function App() {
   const [boot, setBoot] = useState<Boot>({ status: "loading" });
-  const [view, setView] = useState<"register" | "manage">("register");
+  const [view, setView] = useState<"register" | "manage" | "feedback">("register");
+  // Aba inicial da gestão (ex.: "Avaliações" ao vir do perfil do administrador).
+  const [manageTab, setManageTab] = useState<string | undefined>(undefined);
   const [editTarget, setEditTarget] = useState<ApiRecord | null>(null);
   const [help, setHelp] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -109,6 +112,7 @@ export default function App() {
   }
 
   const readyToken = boot.status === "ready" ? boot.idToken : "";
+  const fb = useFeedbackStatus(readyToken);
   const refreshRooms = useCallback(() => {
     if (!readyToken) return;
     api
@@ -184,6 +188,20 @@ export default function App() {
     setView("register");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+  const isAdmin = user.role === "admin";
+  // Convite da avaliação: só para quem não é administrador, com a coleta aberta.
+  const fbOpen = !isAdmin && !!fb.status?.open && fb.supported;
+  const fbPending = fbOpen && !feedbackDone(fb.status?.cycle || "");
+  const openFeedback = () => {
+    setProfileOpen(false);
+    setView("feedback");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const openFeedbackResults = () => {
+    setProfileOpen(false);
+    setManageTab("Avaliações");
+    setView("manage");
+  };
 
   return (
     <main className="app-shell">
@@ -197,10 +215,22 @@ export default function App() {
             <House size={20} />
             Início
           </a>
-          <a className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>
+          <a className={view === "manage" ? "active" : ""} onClick={() => { setManageTab(undefined); setView("manage"); }}>
             <SecondNavIcon size={20} />
             {isOperador ? "Estoque" : "Histórico e gestão"}
           </a>
+          {fbOpen && (
+            <a className={view === "feedback" ? "active" : ""} onClick={openFeedback}>
+              <MessageCircleHeart size={20} />
+              Avaliar o app
+            </a>
+          )}
+          {isAdmin && (
+            <a onClick={openFeedbackResults}>
+              <MessageCircleHeart size={20} />
+              Avaliações
+            </a>
+          )}
           <a onClick={() => setProfileOpen(true)}>
             <UserRound size={20} />
             Meu parceiro
@@ -248,7 +278,15 @@ export default function App() {
 
         <SyncBar idToken={idToken} uid={user.uid} rooms={rooms} onAuthExpired={onAuthExpired} onReconnect={refreshRooms} />
 
-        {view === "register" ? (
+        {view === "feedback" && fb.status?.open ? (
+          <FeedbackForm idToken={idToken} rooms={rooms} buddy={buddy} status={fb.status} onDone={goHome} onAuthExpired={() => onAuthExpired("Sua sessão expirou. Entre novamente.")} />
+        ) : view !== "manage" ? (
+          <>
+            {fbPending && fb.status && !editTarget && (
+              <div className="fb-banner-wrap">
+                <FeedbackBanner status={fb.status} buddy={buddy} onOpen={openFeedback} />
+              </div>
+            )}
           <Register
             user={user}
             idToken={idToken}
@@ -259,8 +297,11 @@ export default function App() {
             onCancelEdit={() => setEditTarget(null)}
             onAuthExpired={() => onAuthExpired("Sua sessão expirou. Entre novamente.")}
           />
+          </>
         ) : (
           <Management
+            key={manageTab || "gestao"}
+            initialTab={manageTab}
             user={user}
             idToken={idToken}
             rooms={rooms}
@@ -279,7 +320,7 @@ export default function App() {
             <House size={22} />
             <span>Início</span>
           </a>
-          <a className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>
+          <a className={view === "manage" ? "active" : ""} onClick={() => { setManageTab(undefined); setView("manage"); }}>
             <SecondNavIcon size={22} />
             <span>{secondNavLabel}</span>
           </a>
@@ -288,10 +329,17 @@ export default function App() {
               <Plus size={26} strokeWidth={2.8} />
             </span>
           </a>
-          <a onClick={() => setHelp(true)}>
-            <Sparkles size={22} />
-            <span>Ajuda</span>
-          </a>
+          {fbOpen ? (
+            <a className={view === "feedback" ? "active" : ""} onClick={openFeedback}>
+              <MessageCircleHeart size={22} />
+              <span>Avaliar</span>
+            </a>
+          ) : (
+            <a onClick={() => setHelp(true)}>
+              <Sparkles size={22} />
+              <span>Ajuda</span>
+            </a>
+          )}
           <a onClick={() => setProfileOpen(true)}>
             <UserRound size={22} />
             <span>Perfil</span>
@@ -314,6 +362,22 @@ export default function App() {
           <p className="data-note" style={{ margin: 0 }}>
             {BUDDIES[buddy].name} aparece na abertura, no início e comemora cada check-in com você. A escolha fica guardada neste aparelho.
           </p>
+          {isAdmin && (
+            <>
+              <p className="lbl">Avaliação das recreadoras</p>
+              <FeedbackControl idToken={idToken} status={fb.status} supported={fb.supported} onChange={fb.setStatus} onAuthExpired={() => onAuthExpired("Sua sessão expirou. Entre novamente.")} />
+              <button className="secondary logout-button" type="button" onClick={openFeedbackResults}>
+                <MessageCircleHeart size={18} />
+                Ver respostas
+              </button>
+            </>
+          )}
+          {fbOpen && (
+            <button className="primary logout-button fb-answer" type="button" onClick={openFeedback}>
+              <MessageCircleHeart size={18} />
+              Responder avaliação ({fb.status?.cycle})
+            </button>
+          )}
           <button className="secondary logout-button" type="button" onClick={doLogout}>
             <LogOut size={18} />
             Sair da conta
